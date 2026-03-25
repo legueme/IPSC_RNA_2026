@@ -1,0 +1,200 @@
+---
+title: "erosion_QA"
+format: html
+---
+
+
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(mclust)
+library(khroma)
+```
+
+
+```{r load se}
+if (!exists('t2t_clean_se')) {
+    t2t_clean_se <- readRDS(here('t2t_clean_se.rds'))
+} 
+```
+
+
+```{r make dds}
+if (!exists('t2t_dds')) {
+t2t_dds <- DESeqDataSet(t2t_clean_se, ~ Karyotype)
+t2t_dds <- estimateSizeFactors(t2t_dds)
+t2t_keep <- rowSums(counts(t2t_dds) >= 10) >= 3
+t2t_dds <- t2t_dds[t2t_keep,]
+}
+
+assays(t2t_dds)$vst_Karyotype <- vst(t2t_dds) %>% assay()
+```
+
+
+```{r XIST expr}
+XIST_expr <- 
+  t2t_dds[mcols(t2t_dds)$gene_name == 'XIST',] %>%
+  counts(normalized = TRUE) %>% #Mclust(XIST_counts) %>%#'Mclust' model object: (V,3) # Best model has 3 clusters #  .$BIC #3 -1661.957 -1187.364
+  t() %>%
+  as.data.frame() %>% 
+  rownames_to_column('names') %>%
+  mutate(XISTcounts = V1, .keep = 'unused') %>%
+  left_join(
+    colData(t2t_dds) %>% as.data.frame(),
+    by = 'names'
+  ) %>%
+  left_join(
+    t2t_dds[mcols(t2t_dds)$gene_name == 'XIST',] %>% 
+      assays() %>% 
+      .$vst_Karyotype %>% t() %>% as.data.frame() %>% 
+      rownames_to_column('names') %>%
+      mutate(XISTvst = V1, .keep = 'unused')
+  ) %>%
+  mutate(
+    XISTcluster = Mclust(.$XISTvst) %>% .$classification %>% as.factor(),
+    XISTbimodal = Mclust(.$XISTvst, G = 2) %>% .$classification %>% as.factor(),
+    XISTexclude = case_when(XCD > 1 & XISTbimodal == 1 ~ 'excluded', TRUE ~ 'included')
+  )
+
+```
+
+
+```{r}
+XIST_expr %>%
+  ggplot(aes(XCD, log2(XISTcounts + 1), fill = fct_reorder(Karyotype, XCD), shape = XISTcluster, alpha = XISTexclude)) +
+  geom_jitter(width = 0.1, stroke = 0.15) +
+  scale_shape_manual(values = c('1'= 25, '2' = 23, '3' = 24)) +
+  scale_alpha_manual(values = c('excluded'= 0.5 , 'included' = 0.85)) +
+  scale_fill_discrete(palette = khroma::color('muted', reverse = TRUE)) +
+  theme_bw() +
+  guides(fill = guide_legend(override.aes = list(shape = 21, size = 1.5))) +
+  labs(
+    y = 'XIST expression (log2 counts)',
+    fill = 'Karyotype'
+  )
+
+
+```
+
+
+```{r}
+t2t_XISTclean_se <- 
+  t2t_clean_se[,t2t_clean_se$names %in% dplyr::filter(XIST_expr, XISTexclude == 'included')$names]
+
+saveRDS(t2t_XISTclean_se, 't2t_XISTclean_se.rds')
+```
+
+cleanest comparability with dream/limma: Use the voom scale you already have:
+x <- vobj$E[gene, ] (logCPM with the voom 0.5 offset)
+Then run Mclust on x.
+
+If you want a DESeq2-native transform for ML/clustering: Use VST with blind=FALSE (given strong group differences / structural zeros)
+Then run Mclust.
+
+
+
+
+#bimodality only on Xn stratified, for Xn =  1 and Xn = 2
+classif_list <- 
+  
+poly2_wald_dds[mcols(poly2_wald_dds)$gene_symbol == 'XIST',] %>%
+ assays() %>% 
+ .$XYscaled_vst %>% t() %>%
+ as.data.frame() %>%
+ rownames_to_column('names') %>%
+  full_join(
+    colData(poly2_wald_dds) %>% as.data.frame(),
+    by = 'names'
+  ) %>%
+  split.data.frame(~Xn) %>%
+  lapply(pull, ENSG00000229807.13) %>%
+  lapply(Mclust) %>%
+  lapply(., function(x) x$classification)
+
+
+
+XISTcoldata <- 
+  colData(poly2_wald_dds) %>% 
+  as.data.frame() %>% 
+  split.data.frame(~Xn) %>%
+  map2(classif_list, ~mutate(.x, XISTcluster = paste0('Xn', .x$Xn, '_', .y))) %>%
+  bind_rows()
+
+
+
+```{r}
+  left_join(
+    XISTcoldata,
+    poly2_wald_dds[mcols(poly2_wald_dds)$gene_symbol == 'XIST',] %>%
+    assays() %>% .$XYscaled_vst %>% t() %>% as.data.frame() %>% rownames_to_column('x') %>%
+    `colnames<-`(c( 'names', 'XY_zs_XIST')),
+    by = 'names'
+  ) %>% 
+  mutate(exclusion = ifelse(XISTcluster == 'Xn2_1', 'excluded lines', 'included')) %>%
+  
+  ggplot(aes(gonSex, XY_zs_XIST, fill = XISTcluster,  shape = exclusion, label = SCA_id)) + #, label = SCA_id #color = XISTcluster,
+  geom_point( size = 3, alpha = 0.5, show.legend = c(fill = FALSE, color =  TRUE)) + #shape = TRU
+  geom_text(size = 3) +
+  scale_shape_manual(values = c(`excluded lines` = 20, 'included' = 21)) +
+ # scale_fill_manual(values = c(on = 'salmon', off = 'aquamarine3')) +
+#  scale_color_manual(values = c(on = 'salmon', off = 'aquamarine3')) +
+  scale_fill_brewer(palette = 'Spectral', direction = -1) +
+  facet_wrap(~Xn, ncol = 4) +
+  theme_minimal() +
+    theme(plot.subtitle = element_text(hjust = 0.5, size= 9)) +
+  #guides(fill = guide_legend(override.aes = list (shape = 21))) +
+  labs(
+    x = '',
+    y = 'XIST expression (XY scaled)',
+    color = 'XIST classification',
+    shape = '',
+    subtitle = 'X chromosome number',
+    title = 'XIST expression across X-chromosome dosages' 
+  ) 
+```
+
+
+```{r}
+XIST_exclude <- 
+  XISTcoldata %>% dplyr::filter(XISTcluster == 'Xn2_1') %>% pull(SCA_id)
+```
+
+
+are 'XN > 2 ' one or two clusters? YES
+
+```{r}
+  
+poly2_wald_dds[mcols(poly2_wald_dds)$gene_symbol == 'XIST',] %>%
+ assays() %>% 
+ .$XYscaled_vst %>% t() %>%
+ as.data.frame() %>%
+ rownames_to_column('names') %>%
+  full_join(
+    colData(poly2_wald_dds) %>% as.data.frame(),
+    by = 'names'
+  ) %>%
+  dplyr::filter(Xn == 3 | Xn == 4) %>%
+  pull(ENSG00000229807.13) %>%
+  Mclust() %>%
+  .$BIC
+  
+```
+
+
+is 'XN2 high part of the same cluster? yes
+
+```{r}
+poly2_wald_dds[mcols(poly2_wald_dds)$gene_symbol == 'XIST',] %>%
+ assays() %>% 
+ .$XYscaled_vst %>% t() %>%
+ as.data.frame() %>%
+ rownames_to_column('names') %>%
+  full_join(
+    colData(poly2_wald_dds) %>% as.data.frame(),
+    by = 'names'
+  ) %>%
+  dplyr::filter(ENSG00000229807.13 > 7.5) %>%
+  pull(ENSG00000229807.13) %>%
+  Mclust() %>%
+  .$BIC
+```

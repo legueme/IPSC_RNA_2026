@@ -1,0 +1,585 @@
+---
+title: "t2t_se"
+date: "2026-03-16"
+format: html
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+here::i_am("IPSC_SCA.Rproj")
+
+library(tidyverse)
+library(here)
+library(openxlsx)
+library(SummarizedExperiment)
+library(rtracklayer)
+library(tximeta)
+library(ggVennDiagram)
+```
+
+
+```{r for now, eval=FALSE}
+
+#library(AnnotationDbi)
+#library(org.Hs.eg.db)
+#library(GenomicRanges)
+#library(GenomicFeatures)
+
+library(IRanges)
+
+
+
+library(DESeq2)
+
+library(ggrepel)
+library(PCAtools)
+
+
+```
+
+```{r load sample metadata, cache=TRUE}
+
+
+id_check_tb <- read.xlsx(here('../SDN_Multiomic/IPSC_RNA/Identity check_SCA_all sample types.xlsx'), sheet = 1) # colnames were modified for Identifing origin tissue (in the original it was marked with color)
+id_sca_project <- read.xlsx(here('../SDN_Multiomic/IPSC_RNA/iPSC_september_complete_original.xlsx'), sheet = 7)
+
+#  fibroblast RNA data as reference for identity match
+fcl_env <- new.env()
+load(here('../SDN_Multiomic/IPSC_RNA/FCL_RNA_siyuan/FCL_dds_comparison.RData'), envir = fcl_env)
+fcl_dds <- fcl_env$dds
+
+up_passage <- read.xlsx('../SDN_Multiomic/NYSCF & NIMH_iPSC & NSC Line Status_012726_EXTERNAL.xlsx', sep.names = '_')
+
+
+#monoclo_tb <- read.xlsx( here('../SDN_Multiomic/IPSC_RNA/iPSCs_Monoclonalized_051325.xlsx'),sheet = 1) #maybe redundant
+#raw_passage_tb <- read.xlsx( here('../SDN_Multiomic/IPSC_RNA/Passage numbers_iPSC sequencing 2024 .xlsx'), sheet = 1)  #maybe redundant
+
+```
+
+```{r prepare metadata}
+cross_ids <-
+    id_check_tb %>% 
+      `colnames<-`(make.unique(colnames(.))) %>% ## this step rename duplicated columns str_c(colnames(id_check_tb)[id_check_tb %>% colnames() %>% duplicated()], sep = ',')
+      dplyr::filter(str_starts(DNUBiolSampleID, 'DN')) %>%
+      pivot_longer(c(NHLBI.iPSC.1, NHLBI.iPSC.2), values_to = 'NHLBI_id', names_to = 'temp') %>%
+      mutate(
+        NHLBI_id =NHLBI_id,
+        DNU_id = case_when(DNUBiolSampleID == Blood.id ~ DNUBiolSampleID, TRUE ~ 'mismatch'),
+        FCL_id = Fibroblast.id,
+        NYSCF_id = case_when(str_ends(temp, '1') &  NYSCF.iPSC.1 == NPC.1 ~ NYSCF.iPSC.1, 
+                             str_ends(temp, '2') &  NYSCF.iPSC2 == NPC.2 ~ NYSCF.iPSC2, TRUE ~ 'mismatch'),
+        Karyotype = Dx,
+        Biopsy = Study,
+        Age = Age,
+        .keep = 'none') %>%
+      dplyr::filter(NYSCF_id != 'CF0013-04') # discontinued
+
+ipsc_ids <- 
+   id_sca_project %>% 
+      dplyr::filter(str_starts(Short.ID, '^[\\d]+$')) %>%
+      mutate(NHLBI_id = str_remove_all(Derived.from, '[()]'),
+          #   NYSCF_id = str_extract(`CF.#`, '^[^-]*-[^-]*'), # so many inconsistencies I'll exclude this double check for now
+             SCA_id = paste0('SCA', str_pad(Short.ID, width = 2, side = 'left', pad = 0)),
+             Karyotype = Dx,
+             Batch = Batch,
+             Seed_pass = str_extract(`Seeding.passage.#`, '^[^ ]+') %>% as.numeric(),
+             Harvest_pass = str_extract(`Freezing.passage.#`, '^[^ ]+') %>% as.numeric(),
+             .keep = 'none') 
+
+fcl_ids <- 
+  colData(fcl_dds) %>% 
+    as.data.frame() %>%
+    mutate(DNU_id = str_sub(Sample, end = 9L),
+           FCL_karyotype = Group,
+           FCL_age = Age,
+           .keep = 'none')
+
+passages <- 
+  up_passage %>% 
+    dplyr::filter(Cohort == 'Aneuploidy' & iPSC_status != 'Discontinued' & iPSC_status != 'Did not pass') %>%
+    mutate(NYSCF_id = NYSCF_ID,
+           NHLBI_id = if_else(NYSCF_ID == 'CF0037-04', 'HT946A', NIMH_ID),
+           Karyotype = `Mutation_/_Genotype`,
+           Monoclonization = if_else(`Monoclonalization?` == 'Pass', 'yes', 'no'),
+           Initial_pass = as.numeric(`Passage_#_at_Arrival`),
+           NYSCF_pass =  str_extract(Passages_at_NYSCF, '^[^ ]+') %>% as.numeric(),
+           cum_pass = str_extract(`Cumulative_Passage_#`, '^[^ ]+') %>% as.numeric(),
+           Sample_Type = Sample_Type,
+           Status =  iPSC_status,
+           NYSCF_lot = `Lot_#`,
+           .keep = 'none'
+           ) 
+
+
+```
+
+
+
+
+
+```{r make meta }
+
+sca_meta <-
+  left_join(
+    cross_ids , 
+    ipsc_ids ,
+    by = c(intersect(colnames(cross_ids),colnames(ipsc_ids))) 
+    ) %>% 
+  left_join(
+    fcl_ids,
+    by = c(intersect(colnames(.), colnames(fcl_ids)))
+  ) %>%
+  left_join(
+    passages,
+    by = c(intersect(colnames(.), colnames(passages)))
+  ) %>% 
+  mutate(
+    Scaled_age = scale(Age),
+    Centered_age = scale(Age, scale = FALSE, center = TRUE),
+    gonSex = ifelse(str_detect(Karyotype, 'Y'), 'Male', 'Female'),
+    is_SCA = ifelse (Karyotype %in% c('XY' ,'XX'), 'Euploid', 'Aneuploid'),
+    XCD = str_count(Karyotype, 'X'),
+    YCD = str_count(Karyotype, 'Y'),
+    SCD = str_count(Karyotype, 'X|Y')
+  ) 
+
+```
+
+ 
+    complete_passage = case_when(
+      `Monoclonalization?` == 'pass' &  is.na(expansion_pass) ~  NYSCF_pass,
+      `Monoclonalization?` == 'pass' &  is.numeric(expansion_pass) ~ sum(NYSCF_pass, expansion_pass, na.rm = TRUE),
+      `Monoclonalization?` == 'N/A' ~ cum_pass,
+      .default = cum_pass
+                ),
+    complete_passage = if_else(is.na(complete_passage), 15, complete_passage), # mean 15, median 16
+
+
+#In case karyotype info is needed (from cross table)
+#   unite('NHLBI.iPSC.Global.Screening.Array', c(NHLBI.iPSC1.Global.screening.array, NHLBI.iPSC2.Global.screening.array), na.rm = TRUE, remove = TRUE) %>%
+    #  unite('NHLBI.iPSC.CellLine.genetics', c(NHLBI.iPSC1.CellLine.genetics, NHLBI.iPSC2.CellLine.genetics), na.rm = TRUE, remove = TRUE) %>%
+     # unite('NHLBI.iPSC.WiCell.Karyotyping', c(NHLBI.iPSC1.WiCell.Karyotyping, NHLBI.iPSC2.WiCell.Karyotyping), na.rm = TRUE, remove = TRUE) %>%
+      
+     # unite('NYSCF.iPSC.Global.Screening.Array', c(NYSCF.iPSC1.Global.screening.array, NYSCF.iPSC2.Global.screening.array), na.rm = TRUE, remove = TRUE) %>%
+     # unite('NYSCF.iPSC.CellLine.genetics', c(NYSCF.iPSC1.Illumina.CoreExome24, NYSCF.iPSC2.Illumina.CoreExome24), na.rm = TRUE, remove = TRUE) %>%
+     # unite('NYSCF.iPSC.WiCell.Karyotyping', c(NYSCF.iPSC1.FluIdigm.SNPTrace, NYSCF.iPSC2.FluIdigm.SNPTrace), na.rm = TRUE, remove = TRUE) %>%
+
+     # unite('NPC.Global.screening.array', c(NPC1.Global.screening.array, NPC2.Global.screening.array), na.rm = TRUE, remove = TRUE) %>%
+     # unite('NPC.FluIdigm.SNPTrace', c(NPC1.FluIdigm.SNPTrace, NPC2.FluIdigm.SNPTrace), na.rm = TRUE, remove = TRUE) %>%
+     # unite('NPC.WiCell.Karyotyping', c(NPC1.WiCell.Karyotyping, NPC2.WiCell.Karyotyping), na.rm = TRUE, remove = TRUE) %>%
+   
+      dplyr::select(-c(NGN2.iPSC, Karyotyping, Genotyping))
+             
+    #  pivot_longer(c(NYSCF.iPSC.1, NYSCF.iPSC.2), values_to = 'NYSCF.iPSC', names_to = 'NYSCF.iPSC.clone') %>%
+     # pivot_longer(c(NHLBI.iPSC.1, NHLBI.iPSC.2), values_to = 'NHLBI.iPSC', names_to = 'NHLBI.iPSC.clone') %>% unique()
+
+
+
+```{r set masked samples, message=FALSE}
+
+YFULLdir  <- here('t2t_YFULLSAL/') 
+YPARdir <- here('t2t_YPARSAL/')
+
+t2t_coldata <- 
+  sca_meta %>%
+    mutate(
+      names = paste0(SCA_id, '_IRiPSC_quant'),
+      files = case_when(
+        gonSex == 'Female' ~ paste0(YFULLdir, names, '/quant.sf'), 
+        gonSex == 'Male' ~  paste0(YPARdir, names, '/quant.sf'),
+        .default = 'error' )
+      ) %>%
+    arrange(SCA_id)
+
+```
+
+```{r tx2gene, cache=TRUE}
+
+t2t_tx2gene <- read_tsv('t2t_tx2gene.tsv', col_names = c('TXNAME','GENEID')) # created in bwlf with gffread for consistency
+```
+
+
+```{r import salmon}
+
+if (!exists('t2t_YFULLmask_se')) {
+  t2t_YFULLmask_se <- 
+    tximeta(t2t_coldata[t2t_coldata$gonSex == 'Female',], 
+            skipMeta=TRUE, 
+            txOut=FALSE,
+            tx2gene=t2t_tx2gene)
+}
+
+if (!exists('t2t_YPARmask_se')) {
+  t2t_YPARmask_se <- tximeta(t2t_coldata[t2t_coldata$gonSex == 'Male',], 
+                          skipMeta=TRUE, 
+                          txOut=FALSE,
+                          tx2gene=t2t_tx2gene)
+} 
+
+# couldn't find matching transcriptome, returning non-ranged SummarizedExperiment # 
+# so I used tx2gene, txOut=FALSE and skipMeta=TRUE # otherwise not able to summarize to gene
+
+
+```
+
+```{r merge fem and male ses}
+
+# check missmatching gene ids
+diff_genes <- list(fem = t2t_YFULLmask_se, 
+     male = t2t_YPARmask_se) %>%
+  lapply(rownames) %>%
+  Venn() %>%
+  process_region_data() %>% dplyr::filter(name == 'fem' | name == 'male') %>%
+  unnest(item) %>% pull(item)
+
+a <- assays(t2t_YFULLmask_se)[['counts']]
+a[rownames(a) %in% diff_genes ,] %>% rowSums() #  all of them zero counts
+
+t2t_YFULLmask_se <- t2t_YFULLmask_se[!rownames(t2t_YFULLmask_se) %in% diff_genes, ] 
+t2t_se <- cbind(t2t_YFULLmask_se, t2t_YPARmask_se) 
+
+if(validObject(t2t_se) &
+   identical(NROW(t2t_se), 
+             NROW(t2t_YFULLmask_se), 
+             NROW(t2t_YFULLmask_se)) == TRUE &
+   identical(NCOL(t2t_se), 
+             sum(NCOL(t2t_YFULLmask_se), NCOL(t2t_YPARmask_se))) == TRUE
+   ){rm(t2t_YFULLmask_se, t2t_YPARmask_se, a)}
+  
+```
+
+
+```{r make it ranged}
+
+if (!exists('rr')) {
+rr <- rtracklayer::import ('chm13v2.0_RefSeq_Liftoff_v5.2.gff3.gz') #make Granges object from gff3 canalso can use link
+}
+
+rowRanges(t2t_se) <- rr[match(rownames(t2t_se), rr$ID),]
+```
+
+
+```{r load gene annotations}
+
+# XCI 
+balaton <- read.csv(here('../SDN_Multiomic/balaton.csv')) # Balaton, 2015
+Balaton_name <-balaton$Balaton.consensus.calls[match(mcols(t2t_se)$gene_name, balaton$Gene.Name)]
+if (!exists('Balaton_syn')) {
+Balaton_syn <- purrr::map_chr(mcols(t2t_se)$gene_synonym, 
+                              ~ balaton$Balaton.consensus.calls[balaton$Gene.Name %in% .x][1],
+                              .default = NA_character_)
+}
+gylemo <- read.xlsx(here('../SDN_Multiomic/IPSC_RNA/XCI_Gylemo_2025.xlsx'), sheet = 5) # Gylemo, 2025 
+Gylemo_name <-gylemo$new_category[match(mcols(t2t_se)$gene_name, gylemo$gene)]
+if (!exists('Gylemo_syn')) {
+Gylemo_syn <- purrr::map_chr(mcols(t2t_se)$gene_synonym, 
+                              ~ gylemo$new_category[gylemo$gene %in% .x][1],
+                              .default = NA_character_)
+}
+# Tukiainen 2025 
+
+# gametologs
+if (!exists('gam_pairs')) {
+  gam_pairs <- 
+    data.frame(
+    'y_gametolog' = c(
+      "AMELY", "DDX3Y", "EIF1AY",
+      "HSFY1", "HSFY2", "KDM5D", 
+      "NLGN4Y", "PCDH11Y", "PRKY", 
+      "RBMY1A1", "RBMY1B", "RBMY1D", "RBMY1E", "RBMY1F", "RBMY1J", 
+      "RPS4Y1", "RPS4Y2",
+      "SRY", "TBL1Y", "TGIF2LY", "TMSB4Y", 
+      "TSPY1", "TSPY10", "TSPY2", "TSPY3", "TSPY4", "TSPY8", "TSPY9P",
+      "TXLNGY", "USP9Y", "UTY", 
+      "VCY", "VCY1B", "VCY-", "VCY-",
+      "ZFY"),
+    'x_gametolog' = c(
+      "AMELX", "DDX3X", "EIF1AX", 
+      "HSFX1", "HSFX2", "KDM5C", 
+      "NLGN4X", "PCDH11X", "PRKX",
+      "RBMX", "RBMX", "RBMX", "RBMX", "RBMX", "RBMX", 
+      "RPS4X", "RPS4X",
+      "SOX3", "TBL1X", "TGIF2LX","TMSB4X", 
+      "TSPYL2","TSPYL2","TSPYL2","TSPYL2","TSPYL2","TSPYL2","TSPYL2",
+      "TXLNG", "USP9X", "KDM6A", 
+      "VCX", "VCX2", "VCX3A", "VCX3B", 
+      "ZFX")
+   )
+} 
+
+gam_fullpair <- 
+  data.frame(
+  'gene_symbol' = c(gam_pairs$y_gametolog, 
+                    gam_pairs$x_gametolog),
+  'gam_pair' = c(gam_pairs$x_gametolog, 
+                 gam_pairs$y_gametolog)
+  )
+
+centromeres <- 
+  read.table('chm13v2.0_censat_v2.1.bed') %>%
+  dplyr::filter(str_detect(V4, 'arm')) %>%
+  mutate(chr = V1,
+         start = V2,
+         end = V3,
+         arm = str_extract(V4, '(?<=\\().'),
+         .keep = 'none')
+
+telomeres <- 
+  read.table('chm13v2.0_telomere.bed') %>%
+    mutate(chr = V1,
+           start = V2,
+           end = V3,
+           arm = if_else(V2 == 0, 'p', 'q'),
+           .keep = 'none')
+```
+
+```{r chr location label fx}
+
+label.chr <- function(gr, bed) {
+  chr <- as.character(seqnames(gr))
+  reg <- ifelse(chr == "chrM", "chrM",
+         ifelse(chr == "chrX", "X-linked",
+         ifelse(chr == "chrY", "Y-linked", "Autosomal"))) #Default labels
+  bed_gr <- rtracklayer::import(bed)   # Import PAR bed file form chm13 github
+  bed_chr <- as.character(seqnames(bed_gr)) # Infer PAR1/PAR2 separately for X and Y
+  bed_start <- start(bed_gr)
+  par_names <- character(length(bed_gr))
+   # For each chromosome, identify PAR1 (earlier) vs PAR2 (later)
+  for (chr_name in unique(bed_chr)) {
+    idx <- which(bed_chr == chr_name)
+    if (length(idx) == 2) {
+      # Assume earlier region is PAR1, later is PAR2
+      par_names[idx] <- c("PAR1", "PAR2")[order(bed_start[idx])]
+    } else if (length(idx) == 1) {
+      # Only one PAR region - assume PAR1
+      par_names[idx] <- "PAR1"
+    }
+  }
+  mcols(bed_gr)$par_name <- par_names
+  overlaps <- findOverlaps(gr, bed_gr)   # Find overlaps
+  
+  if (length(overlaps) > 0) {
+    within <- findOverlaps(gr, bed_gr, type = "within")     # Within PAR
+    reg[queryHits(within)] <- par_names[subjectHits(within)]
+    all_overlap <- unique(queryHits(overlaps))    
+    border <- setdiff(all_overlap, queryHits(within))  # Border
+    
+    if (length(border) > 0) {
+      border_overlaps <- overlaps[queryHits(overlaps) %in% border]
+      reg[queryHits(border_overlaps)] <- paste0(
+        par_names[subjectHits(border_overlaps)], "_border"
+      )}
+  }
+  
+  return(reg)
+}
+
+```
+
+
+
+```{r add gene info}
+# Chromosomic location
+mcols(t2t_se)$chr_loc <- 
+  label.chr(gr = rowRanges(t2t_se), bed = here('chm13v2.0_PAR.bed'))
+
+mcols(t2t_se)$short_loc <-
+  if_else(str_detect(mcols(t2t_se)$chr_loc, 'PAR'), 'PAR', mcols(t2t_se)$chr_loc) 
+
+# XCI 
+mcols(t2t_se)$Balaton <- 
+  data.frame(n = Balaton_name, s = Balaton_syn) %>% 
+    tidyr::unite('B', n, s) %>% 
+    mutate(B = str_remove(B, 'NA_|_NA|_No call|No call_'),
+           B = str_replace(B, 'S_S', 'S')) %>%
+    pull(B)
+
+mcols(t2t_se)$Gylemo <-
+  data.frame(n = Gylemo_name, s = Gylemo_syn) %>% 
+    tidyr::unite('B', n:s) %>% 
+    mutate(B = str_remove_all(B, 'NA_|_NA'),
+           B = str_replace(B, 'inactive_across_tissues_inactive_across_tissues', 'inactive_across_tissues')) %>%
+    pull(B)
+
+# Gametolog
+mcols(t2t_se)$is_gametolog <- 
+  case_when(
+    mcols(t2t_se)$gene_name %in% gam_pairs$y_gametolog ~ 'Y_gametolog', 
+    mcols(t2t_se)$gene_name %in% gam_pairs$x_gametolog ~ 'X_gametolog', 
+    .default = 'no_g')
+
+# TSS
+mcols(t2t_se)$tss <- 
+  promoters(rowRanges(t2t_se), upstream = 0, downstream = 1) %>% 
+  as.data.frame() %>% pull(start)
+
+# Distance to telomere # don't think need to be here
+#rowData(t2t_se)
+
+#mcols(up_se)$ENSG_id # not sure if necessary 
+#mcols(up_se)$gene_alias # gene_synonym 
+#mcols(up_se)$biotype  # gene_biotype 
+
+#mcols(t2t_se)$chr_loc %>% table()
+```
+
+
+```{r save se}
+
+saveRDS(
+  t2t_se, 
+  here('t2t_se.rds'))
+
+```
+
+```{r remove outliers or identity fail}
+
+out <- 
+  colData(t2t_se) %>% 
+    as.data.frame() %>%
+  filter((
+     SCA_id == 'SCA06' |
+     SCA_id == 'SCA71' ))
+
+t2t_clean_se <- 
+  t2t_se[, !colData(t2t_se)$SCA_id %in% out$SCA_id ]
+
+saveRDS(
+  t2t_clean_se,
+   here('t2t_clean_se.rds'))
+  
+```
+
+
+```{r}
+write.xlsx(
+sca_meta,
+'SCA_project_metadata.xlsx'
+)
+
+
+```
+
+
+
+
+WIP here for addint telomere distance
+
+gene_tss
+
+if_else(rowRanges(t2t_se)$tss < cent$start, 
+
+t2t_se %>% rowRanges() %>% seqnames() %>% as_vector()
+
+seqnames(rowRanges(t2t_se)) %>% as.vector() 
+
+length(rowRanges(t2t_se))
+
+centromeres %>% pivot_wider(names_from = c())
+
+
+###
+###
+  
+  
+  # Determine arm for each gene based on centromere position
+  chr <- as.character(seqnames(rowranges))
+  
+  # Initialize vectors
+  arm <- character(length(rowranges))
+  tel_distance <- numeric(length(rowranges))
+  
+  for (i in seq_along(rowranges)) {
+    gene_chr <- chr[i]
+    gene_tss <- tss[i]
+    
+    # Get centromere for this chromosome
+    
+    cent <- centromeres[centromeres$chr == gene_chr, ]
+    
+    if (nrow(cent) == 0) {
+      arm[i] <- NA
+      tel_distance[i] <- NA
+      next
+    }
+    
+    # Determine arm
+    if (gene_tss < cent$start[1]) {
+      arm[i] <- "p"
+      # Distance to p-arm telomere (chromosome start)
+      tel <- telomeres[telomeres$chr == gene_chr, ][1, ]
+      tel_distance[i] <- abs(gene_tss - tel$end)
+    } else {
+      arm[i] <- "q"
+      # Distance to q-arm telomere (chromosome end)
+      tel <- telomeres[telomeres$chr == gene_chr, ][2, ]
+      tel_distance[i] <- abs(gene_tss - tel$start)
+    }
+  }
+  
+  # Add annotations to rowranges
+  mcols(rowranges)$tss <- tss
+  mcols(rowranges)$arm <- arm
+  mcols(rowranges)$telomere_distance <- tel_distance
+  
+  return(rowranges)
+}
+
+# Usage:
+# annotated_rr <- annotate_tss_telomere_distance(rowranges, centromere_bed, telomere_bed)
+
+
+arm = case_when(
+       tss < dplyr::filter(centromeres, chrom == 'chrX') %>% pull(chromStart) ~ 'p',
+       tss > dplyr::filter(centromeres, chrom == 'chrX') %>% pull(chromEnd) ~ 'q',
+       .default = 'x'),
+    t_dist = case_when(
+      arm == 'p' ~ tss,
+      arm == 'q' ~ dplyr::filter(chr_lengths, rownames(chr_lengths) == 'chrX') %>% pull(lenght) - tss,
+      .default = -999),
+
+
+# notes:
+
+  #  (DNUBiolSampleID == 'DN-072-01' & name == 'Clone2_HP') |      # Y outlier
+  #  (DNUBiolSampleID == 'DN-010-01' & name == 'Clone2_HP') |      # Y outlier
+  #  (DNUBiolSampleID == 'DN-082-01' & name == 'Clone1_HP') |      # X & Y outlier
+  #  (DNUBiolSampleID == 'DN-065-01' & name == 'Clone2_HP') |      # X outlier
+  #  (DNUBiolSampleID == 'DN-064-01' ) |                           # X outlier
+  #  (DNUBiolSampleID == 'DN-095-02' & name == 'Clone1_HP') |      # X outlier
+    #(DNUBiolSampleID == 'DN-025-01' & name == 'Clone1_HP') |      # SNP Match w/ DN-064-01 (XX) (labeled as #XXXX), PCA cluster w/ XO 
+  # (DNUBiolSampleID == 'DN-340-01' & name == 'Clone1_HP') |      # XY swap? (labeled as #XXY) # different cluster than clone but same snps, #technical or biological ariability? 
+  # (DNUBiolSampleID == 'DN-001-01' & name == 'Clone1_HP') |      # XY swap? (labeled as #XXY)
+  #  (DNUBiolSampleID == 'DN-003-01' ) |                           # XY swap? (labeled as #XXY)
+  #  (DNUBiolSampleID == 'DN-101-01' & name == 'Clone2_HP')        # labeled as #XXYY, snp match with its clone, but is outlier, in pca is between XY &  XYY 
+  
+# clean  
+# temp_unmask_gse[colData(temp_unmask_gse)$CF.. %in%  out$] 
+
+# note:  labeled as females in latest files, - males in lab based files was fixed in se construction
+#/Users/legueme/SDN_Multiomic/IPSC_RNA/Updated_iPSC_RNA/up_ir_YPARSAL/SCA52_IRiPSC_quant/quant.sf 
+#/Users/legueme/SDN_Multiomic/IPSC_RNA/Updated_iPSC_RNA/up_ir_YPARSAL/SCA57_IRiPSC_quant/quant.sf 
+#/Users/legueme/SDN_Multiomic/IPSC_RNA/Updated_iPSC_RNA/up_ir_YPARSAL/SCA61_IRiPSC_quant/quant.sf 
+#/Users/legueme/SDN_Multiomic/IPSC_RNA/Updated_iPSC_RNA/up_ir_YPARSAL/SCA86_IRiPSC_quant/quant.sf 
+
+
+# snp-based swap fix: SCA06 -> SCA01 # however i'll filter it in the next step, so I can skip 
+swap_fix <- function(df, target_id, source_id, id_col = 'SCA_id') {
+  cols_to_replace <- setdiff(names(df), id_col)
+  target_row <- which(df[[id_col]] == target_id)
+  source_row <- which(df[[id_col]] == source_id)
+  df[target_row, cols_to_replace] <- df[source_row, cols_to_replace]
+  df
+}
+
+coldata_fix <- swap_fix(
+  colData(up_se) %>% as.data.frame(),
+  'SCA01',
+  'SCA06')
+
+se_fix <- up_se
+colData(se_fix) <- DataFrame(coldata_fix)
+#coldata_fix[coldata_fix$DNUBiolSampleID == 'DN-101-01',]
+

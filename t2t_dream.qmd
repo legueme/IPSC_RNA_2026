@@ -1,0 +1,134 @@
+---
+title: "t2t_dream"
+format: html
+---
+
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+here::i_am("IPSC_SCA.Rproj")
+
+library(here)
+library(tidyverse)
+library(DESeq2)
+library(limma)
+library(lmerTest)
+library(variancePartition)
+library(edgeR)
+library(BiocParallel)
+```
+
+
+
+
+library(openxlsx)
+library(broom)
+library(mclust)
+library(ggrepel)
+library(ggVennDiagram)
+library(eulerr)
+library(ComplexHeatmap)
+library(karyoploteR)
+library(patchwork)
+library(ggsignif)
+library(khroma)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(rstatix)
+library(estimatr)
+library(emmeans)
+library(broom)
+
+
+
+
+```{r make dge list}
+
+if (!exists('t2t_XISTclean_se')) {
+ t2t_XISTclean_se <- read_rds(here('t2t_XISTclean_se.rds'))
+}
+
+XISTclean_meta <- colData(t2t_XISTclean_se) %>% as.data.frame() 
+XISTclean_counts <- t2t_XISTclean_se %>% assays() %>% .[['counts']] %>% `rownames<-`(rowData(t2t_XISTclean_se)$ID) 
+```
+
+
+
+
+```{r make dge list}
+if (!exists('t2t_dge')) {
+  filter_mmx <- model.matrix(~ poly(XCD,2) + YCD, data = XISTclean_meta)
+  t2t_keep <- filterByExpr(XISTclean_counts, design =  filter_mmx)
+#  t2t_keep <- rowSums(cpm(XISTclean_counts) > 0.1) >= 5
+  t2t_dge <- XISTclean_counts[t2t_keep,] %>% DGEList()
+  t2t_dge <- calcNormFactors(t2t_dge)
+}
+#t2t_dge$counts %>% dim() # 21148    82
+```
+
+```{r}
+t2t_form <- ~ poly(XCD, 2) + YCD + (1|DNU_id)
+t2t_vobj <- voomWithDreamWeights(t2t_dge, t2t_form, XISTclean_meta, BPPARAM = SnowParam(4, "SOCK", progressbar = TRUE))
+t2t_fit <- variancePartition::dream(t2t_vobj, t2t_form, XISTclean_meta)
+t2t_fit  <- variancePartition::eBayes(t2t_fit)
+```
+
+```{r}
+saveRDS(t2t_vobj, here('t2t_vobj.rds'))
+saveRDS(t2t_fit, here('t2t_fit.rds'))
+
+```
+
+```{r YCD as factor}
+#for excluding the Y-linked linear genes absent in the 2 to 1 contrast
+XISTclean_meta$YCD_F <- as.factor(XISTclean_meta$YCD) %>% fct_relevel('1')
+Yf_form <- ~ poly(XCD, 2) + YCD_F + (1|DNU_id)
+
+Yf_vobj <-voomWithDreamWeights(t2t_dge , Yf_form, XISTclean_meta)
+Yf_fit <- dream(Yf_vobj, Yf_form, XISTclean_meta)
+Yf_fit <- variancePartition::eBayes(Yf_fit)
+```
+
+```{r}
+saveRDS(Yf_fit, here('Yf_fit.rds'))
+```
+
+```{r}
+
+XCDL_mm <- variancePartition::topTable(t2t_fit, coef = 'poly(XCD, 2)1', number = Inf)
+XCDQ_mm <- variancePartition::topTable(t2t_fit, coef = 'poly(XCD, 2)2', number = Inf)
+
+Yf_mm <- variancePartition::topTable(Yf_fit, coef = 'YCD_F2', number = Inf) 
+
+YCD_mm <- 
+  variancePartition::topTable(t2t_fit, coef = 'YCD', number = Inf) %>%
+  mutate(sig2to1 = 
+    case_when(
+      rownames(.) %in% rownames(Yf_mm[Yf_mm$adj.P.Val <= 0.05,])  ~ 'yes',
+      rownames(.) %in% rownames(Yf_mm[Yf_mm$adj.P.Val > 0.05,]) ~ 'no',                       ,
+      .default = NA)
+    )
+
+t2t_mm <- list(
+  XCDL_mm = XCDL_mm,
+  XCDQ_mm = XCDQ_mm,
+  YCD_mm = YCD_mm
+) 
+
+saveRDS(t2t_mm, here('t2t_mm.rds'))
+```
+
+```{r}
+coefficients(t2t_fit) %>% colnames()
+```
+
+###
+#coefficients(Yf_fit)
+#rowData(new_dds)[rowData(new_dds)$chr_tag != 'Y_link',]$gene_id  ~ adj.P.Val < 0.05
+#rownames(.) %in% rowData(_dds)[rowData(new_dds)$chr_tag == 'Y_link',]$gene_id  &
+
+```{r, eval=FALSE}
+#packageVersion('variancePartition') # ‘1.40.1 #updated # this was the source of conflict
+#packageVersion('lmerTest') #‘3.2.1’ 
+```
+
