@@ -1,0 +1,242 @@
+---
+title: "CHM13_HG38_benchmarck"
+format: html
+---
+
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+here::i_am("IPSC_SCA.Rproj")
+
+library(here)
+library(tidyverse)
+library(DESeq2)
+library(limma)
+library(lmerTest)
+library(variancePartition)
+library(edgeR)
+library(BiocParallel)
+```
+
+
+```{r load se}
+
+if(!exists('t2t_se')) {
+  t2t_se <- readRDS(here('t2t_se.rds'))
+}
+
+
+if (!exists('uneroded_se')) {
+ uneroded_se <- read_rds(here('../SDN_Multiomic/uneroded_se.rds'))
+}
+
+ hg38_meta <- colData(uneroded_se) %>% as.data.frame() 
+ hg38_counts <- uneroded_se %>% assays() %>% .[['counts']] #%>% `rownames<-`(rowData(t2t_XISTclean_se)$ID) 
+```
+
+
+```{r make dge list}
+if (!exists('hg38_dge')) {
+  hg38filter_mmx <- model.matrix(~ poly(Xn,2) + Yn, data = hg38_meta)
+  hg38_keep <- filterByExpr(hg38_counts, design =  hg38filter_mmx)
+#  t2t_keep <- rowSums(cpm(XISTclean_counts) > 0.1) >= 5
+  hg38_dge <- hg38_counts[hg38_keep,] %>% DGEList()
+  hg38_dge <- calcNormFactors(hg38_dge)
+}
+#t2t_dge$counts %>% dim() # 21148    82
+```
+
+```{r}
+hg38_form <- ~ poly(Xn, 2) + Yn + (1|HT_id)
+hg38_vobj <- voomWithDreamWeights(hg38_dge, hg38_form, hg38_meta, BPPARAM = SnowParam(4, "SOCK", progressbar = TRUE))
+hg38_fit <- variancePartition::dream(hg38_vobj, hg38_form, hg38_meta)
+hg38_fit  <- variancePartition::eBayes(hg38_fit)
+```
+
+```{r}
+saveRDS(hg38_vobj, here('hg38_vobj.rds'))
+saveRDS(hg38_fit, here('hg38_fit.rds'))
+
+```
+
+
+```{r YCD as factor}
+#for excluding the Y-linked linear genes absent in the 2 to 1 contrast
+hg38_meta$YCD_F <- as.factor(hg38_meta$Yn) %>% fct_relevel('1')
+hg38Yf_form <- ~ poly(Xn, 2) + YCD. _F + (1|HT_id)
+
+hg38Yf_vobj <-voomWithDreamWeights(hg38_dge , hg38Yf_form, hg38_meta, BPPARAM = SnowParam(4, "SOCK", progressbar = TRUE))
+hg38Yf_fit <- dream(hg38Yf_vobj, hg38Yf_form, hg38_meta)
+hg38Yf_fit <- variancePartition::eBayes(hg38Yf_fit)
+```
+
+
+```{r}
+saveRDS(hg38Yf_fit, here('hg38Yf_fit.rds'))
+```
+
+```{r}
+
+hg38XCDL_mm <- variancePartition::topTable(hg38_fit, coef = 'poly(Xn, 2)1', number = Inf)
+hg38XCDQ_mm <- variancePartition::topTable(hg38_fit, coef = 'poly(Xn, 2)2', number = Inf)
+
+hg38Yf_mm <- variancePartition::topTable(hg38Yf_fit, coef = 'YCD_F2', number = Inf) 
+
+hg38YCD_mm <- 
+  variancePartition::topTable(hg38_fit, coef = 'Yn', number = Inf) %>%
+  mutate(sig2to1 = 
+    case_when(
+      rownames(.) %in% rownames(hg38Yf_mm[hg38Yf_mm$adj.P.Val <= 0.05,])  ~ 'yes',
+      rownames(.) %in% rownames(hg38Yf_mm[hg38Yf_mm$adj.P.Val > 0.05,]) ~ 'no',                       ,
+      .default = NA)
+    )
+
+hg38_mm <- list(
+  hg38XCDL_mm = hg38XCDL_mm,
+  hg38XCDQ_mm = hg38XCDQ_mm,
+  hg38YCD_mm = hg38YCD_mm
+) 
+
+saveRDS(hg38_mm, here('hg38_mm.rds'))
+```
+
+
+```{r}
+hg38_sig <-
+  hg38_mm %>% 
+  lapply(dplyr::filter, adj.P.Val < 0.05) %>% #.$XCDQ_mm %>% nrow() #nrow(YCD_mm) #343 #XCDL 831 # XCDQ 18
+  lapply(rownames_to_column, 'gene_id') %>%
+  lapply(function(x) {
+    left_join(
+      x, rowData(uneroded_se) %>% as.data.frame() %>% select(where(~!all(is.na(.x)))),
+      by = 'gene_id')
+  })
+
+hg38_sig$hg38YCD_mm <- 
+  hg38_sig$hg38YCD_mm %>% dplyr::filter(!(chr_tag == 'Y_link' & sig2to1 == 'no')) # 331 YCD after cleaning 
+```
+
+
+# now the actual benchmark
+
+```{r}
+c(
+hg38_sig %>% lapply(pull, gene_symbol),
+t2t_sig %>% lapply(pull, gene_name)
+) %>% ggVennDiagram(force_upset = TRUE, nintersects = 20)
+```
+
+```{r}
+t2t_hg38_degs <-
+  c(hg38_sig %>% lapply(pull, gene_symbol),
+    t2t_sig %>% lapply(pull, gene_name)) %>%
+  Venn() %>%
+  process_region_data() %>%
+  unnest(item)
+```
+
+```{r}
+t2t_hg38_degs %>% pull(name) %>% table()
+```
+
+```{r}
+t2t_hg38_degs %>% dplyr::filter(name == 'YCD_mm') %>% pull(item) %>% write_lines('t2t_onlyYCD.txt')
+```
+
+```{r}
+t2t_hg38_degs %>% 
+  dplyr::filter(name == 'YCD_mm') %>% 
+  left_join(t2t_sig$YCD_mm, join_by('item' == 'gene_name')) %>%
+  dplyr::filter(sig2to1 == 'yes')
+
+```
+
+```{r}
+t2t_hg38_degs %>% 
+  dplyr::filter(name == 'YCD_mm') %>% 
+  left_join(t2t_sig$YCD_mm, join_by('item' == 'gene_name')) %>%
+  pull(chr_loc) %>% table()
+```
+
+```{r}
+t2t_hg38_degs %>% 
+  dplyr::filter(name == 'YCD_mm') %>% 
+  left_join(rowRanges(t2t_se) %>% as.data.frame(), 
+            join_by('item' == 'gene_name')) %>%
+  dplyr::filter(!str_starts(item, 'LOC')) %>% #LOC = 47 in chr 6 # with name: 142 in chr 6
+ pull(seqnames) %>% table()
+```
+```{r}
+t2t_hg38_degs %>% 
+  dplyr::filter(name == 'YCD_mm') %>% 
+  left_join(rowRanges(t2t_se) %>% as.data.frame(), 
+            join_by('item' == 'gene_name')) %>%
+  pull(gene_biotype) %>% table()
+```
+
+compare the expression of both filtered datasets
+
+```{r unfiltered expression}
+
+list(
+t2t = rowRanges(t2t_se)$gene_name[!str_starts(rowRanges(t2t_se)$gene_name, 'LOC')] , 
+hg38 = rowData(uneroded_se) %>% as.data.frame() %>% pull(gene_symbol) %>% .[!str_starts(., 'ENSG')] 
+) %>% ggVennDiagram() + scale_fill_gradient(low = 'white', high = 'white')
+```
+
+
+```{r filtered}
+list(
+hg38 = data.frame(hg38 = rownames(hg38_dge$counts)) %>%
+  left_join(rowData(uneroded_se) %>% 
+              as.data.frame() %>% 
+              mutate(hg38 = gene_id, hg38_name = gene_symbol, .keep = 'none') %>%
+              dplyr::filter(!str_starts(hg38_name, 'ENSG')),
+            by = 'hg38') %>% pull(hg38_name),
+t2t = t2t_dge$counts %>% rownames() %>% .[!str_starts(., 'LOC')], 
+YCD_t2t_only
+) %>% 
+  ggVennDiagram() + scale_fill_gradient(low = 'white', high = 'white')
+
+
+```
+
+norm expression correlatin
+
+```{r}
+t2t_cpm <- cpm(t2t_dge, normalized.lib.sizes = TRUE)
+hg38_cpm <- cpm(hg38_dge, normalized.lib.sizes = TRUE)
+
+hg38_sum <- data.frame(hg38_cpm = rowSums(hg38_cpm)) %>% 
+  rownames_to_column('gene_id') %>%
+  left_join(rowData(uneroded_se) %>% 
+              as.data.frame() %>% 
+              mutate(gene_id = gene_id, name = gene_symbol, .keep = 'none'),
+            by = 'gene_id') %>%
+  full_join(data.frame(t2t_cpm = rowSums(t2t_cpm)) %>% rownames_to_column('name'),
+            by = 'name')
+```
+
+
+```{r expression correlation}
+YCD_t2t_only <- t2t_hg38_degs %>% dplyr::filter(name == 'YCD_mm') %>% pull(item)
+#cor.test(hg38_sum$hg38_cpm, hg38_sum$t2t_cpm) #t = 266.31, df = 17259, p-value < 2.2e-16
+#.8968151 
+hg38_sum %>% 
+  mutate(YCD_t2t_only = if_else(name %in% YCD_t2t_only , 'yes', 'no')) %>%
+  dplyr::filter(t2t_cpm < 750000 & hg38_cpm < 750000) %>% # RN7SL2 and RN7SL1 noth, COX1 and EEF1A1 hg38 outliers
+  ggplot(aes(hg38_cpm, t2t_cpm, color = YCD_t2t_only)) +
+  geom_point(alpha = 0.45) +
+  geom_abline(colour = 'lightblue4', lty = 2) +
+  scale_colour_manual(values = c(no = 'grey', yes = 'red')) +
+  annotate(geom = 'text', label = 'Pearson = 0.897\np < 2.2e-16', y = 50000, x= 200000 ) +
+  coord_cartesian(xlim = c(0,250000), ylim = c(0,250000)) +
+  theme_bw() +
+  ggtitle('Normalized expression of common CHM13v2.0-GRCh38.p14 genes(cpm)')
+```
+
+
+```{r log2FC correlations}
+
+```
+
