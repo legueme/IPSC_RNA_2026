@@ -1,0 +1,634 @@
+---
+title: "Sex chromosome dosage effects on iPSCs from sex chromosome aneuploidy patients"
+format: 
+  html:
+    mainfont: Helvetica
+    sansfont: Helvetica
+    self-contained: true
+    smooth-scroll: true
+    include-after-body: 
+      text: |
+        <script>
+          document.addEventListener("DOMContentLoaded", () => {
+            document.querySelectorAll("figcaption").forEach(e => {e.innerHTML 
+            = e.innerHTML.replace(/((.*?)\.)/, "<strong>$1</strong>")})
+          });
+        </script>
+crossref:
+  fig-title: '**Figure**'
+  title-delim: '**. **'
+toc: true
+engine: knitr
+editor: source
+---
+
+```{css, echo = FALSE}
+.justify {
+  text-align: justify !important
+}
+```
+
+::: {.justify}
+
+Marcela Legue^1^, ..., Armin Raznahan^1^
+
+
+:::
+
+
+^1^*Section on Developmental Neurogenomics. Human Genetics Branch. National Institute of Mental Health, National Institute of Health.*<br>
+ 
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+here::i_am("IPSC_SCA.Rproj")
+
+library(knitr)
+library(tidyverse)
+library(here)
+library(SummarizedExperiment)
+library(ggVennDiagram)
+```
+
+
+```{r load}
+if (!exists('uneroded_se')) {
+ uneroded_se <- read_rds(here('../SDN_Multiomic/uneroded_se.rds'))
+}
+
+if (!exists('hg38_dge')) {
+  hg38_dge <- read_rds('hg38_dge.rds')
+} #  created in benchmarck file
+
+if(!exists('hg38_mm')) {
+hg38_mm <- readRDS('hg38_mm.rds')
+} #  created in benchmarck file
+
+```
+
+
+
+```{r clean hg38_mm}
+#add rowranges data and filter out mitochondrial genes
+hg38_clean <- 
+hg38_mm %>%
+  lapply(rownames_to_column, 'gene_id') %>%
+  lapply(function(x) {
+    left_join(x,
+      rowRanges(uneroded_se) %>% as.data.frame() %>% select(where(~!all(is.na(.x)))),
+      by = 'gene_id') }) %>% 
+  lapply(function(x) {
+    mutate(x,
+      is_sig = case_when(
+        seqnames != 'chrY' & adj.P.Val <= 0.05 ~ 'yes', 
+        seqnames == 'chrY' & adj.P.Val <= 0.05 & sig2to1 == 'yes' ~ 'yes',
+        TRUE ~ 'no'))}) %>%
+  lapply(dplyr::filter, seqnames != 'chrM')
+```
+
+
+```{r}
+chr_tag_val <-   
+  color("muted")(4) %>% 
+  setNames(
+    hg38_clean$hg38YCD_mm %>% 
+    mutate(short_tag = if_else(str_starts(chr_tag, 'PAR'), 'PAR', chr_tag), .keep = 'none' ) %>% 
+           pull(short_tag) %>% sort(decreasing = TRUE) %>% unique() 
+           )
+```
+
+### Background
+
+SCA relevance, frequency, clinical impact.
+Clinical phenotypes affect diverse organ systems and  follow diverse patterns, e.g. cognitive, height, gonadal (references Hanson et.al., 2003, Hong and Reiss, 2014, Bonomi et al, 2017; Davis et al, 2020, etc) *less MDD in X0 (Neurodevelopmental and Mental Health Diagnoses Among Pediatric Patients With Turner Syndrome: A PEDSnet Study) , suggesting a complex phenotype-genotype correlation.
+Genes are known to depend on complex regulatory constraints leading to non-linear effects, non-linear responses are enriched for disease and GWAS genes (doi: https://doi.org/10.1101/2024.03.01.582837). Gene dosage sensitivity is a common cause of CNV pathogenicity, specially  neurodevelopment / https://doi.org/10.1038/ncomms14366), mostly studied in autosomal CNVs, but under-studied in sex chromosomes and aneuploidies). 
+Those regulatory considerations are likely relevant for clinical phenotypes and highlights the necessity of studying different patterns of dosage responses, activating and repressing, linear and non-linear. 
+NGS tools are greatly important to investigate the conscience on gene expression and regulation. 
+What has been studied and gaps and limitations of previous studies (~systematic review findings. Increasing interest and knowledge on transcriptomic and epigenetic changes on SCAs but still gaps and challenges).  Contrasts and linear gene dosage responses to sex chromosome number studied previously (refs). However, the regulatory mechanisms underlying non-linear dosage effects on sex chromosomes remain poorly characterized.
+hiPSCs are a effective tool for disease modeling  1,2.
+What this study aims: to investigate the transcriptomic and regulatory SCA consequences, to recognize sex chromosome dosage sensitive genes, dysregulated pathways and modules, for understanding the mechanisms involved in increased clinical-neurodevelopmental risk in SCA 
+What this study adds: modeling a wide range of responses to SCA across a broad range of sex chromosome aneuploidies. Sample size and sex chromosome number representation allows to model linear and non linear patters (X), in a proband derived iPSC system that is not biased by tissue specificity or by hormonal effects. 
+
+
+
+## **Results**
+
+#### **Establishing a panel of hiPSC lines spanning from 1 to 5 sex chromosomes.** 
+
+To systematically investigate transcriptional consequences of sex chromosome dosage variation, we generated and characterized 91 hiPSC lines derived from  euploid and aneuploid individuals with X- and Y-chromosome dosage variation ranging from 1 to 5 sex chromosomes (Table 1). 
+
+
+```{r}
+#| label: tbl-clonesizes
+#| tbl-cap: "Karyotypes and sample sizes of included cell lines "
+#| tbl-cap-location: bottom
+#| tbl-colwidths: [60,40]
+
+uneroded_se %>%
+  colData() %>%
+  as.data.frame() %>%
+  dplyr::select(karyotype, Xn, Yn) %>% 
+  group_by(Yn, Xn, karyotype) %>% 
+  summarize(n = n(), .groups = 'drop') %>%
+  mutate(YCD = Yn,
+         XCD = paste0('XCD ', Xn),
+         kn = paste0(karyotype, ' = ', n),
+.keep = 'none') %>%
+ 
+ # tidyr::unite(kn, karyotype, n, sep = ' = ') %>%
+  pivot_wider(id_cols = YCD, values_from = kn, names_from = XCD) %>%
+   replace_na(list(`XCD 3` = '', `XCD 4` = '')) %>%
+  knitr::kable()
+  
+
+```
+
+
+
+
+Our  hiPSC panel underwent rigorous quality control consisting of: verification of identity match to originating fibroblasts; confirmation of genomic stability, sterility, and pluripotency; and detailed characterization of potential XCI erosion (refs). Briefly, hiPSCs were reprogrammed from skin biopsy-derived fibroblasts cell lines (FCL), using the CytoTuneTM Sendai virus approach 3. The identity of cell lines was confirmed using transcriptome-based genotypification by matching their identities with their fibroblast cell line (FCL) of origin. Genomic stability was assessed using Illumina CoreExome24 and Fluidigm SNP Trace analysis (ref). Mycoplasma infection was ruled out using Lonza MycoAlert Plus (ref). Expression of pluripotency markers was evaluated by transcriptomics and confirmed by (IH). The detailed protocol for reprogramming, genomic stability sterility checking, pluripotency confirmation and identity matching is available at Methods/File SX/ Figures SX.
+
+Given numerous reports of aberrant XCI erosion on hiPSCs 4, we used complimentary imaging and transcriptomic approaches to carefully assess the integrity of XCI on our lines. X-chromosome erosion is characterized by low levels of XIST and loss of H3K27m3  5 and strongly correlates with major remodelations in the proteome 6. Ruling out XCI erosion is particularly relevant in order to study sex chromosomes, and we evaluated it on our cell lines using imaging and transcriptomic approaches. 
+
+Imaging results here 
+
+To evaluate the transcriptomic correlation of the imaging findings on erosion, we assessed the XIST expression and its correlation with a successful X chromosome inactivation. For this, we first stratified the XIST levels by chromosome number, (since XIST levels are expected to differ accordingly, refs * the plot shows not stratified clusters)  We found that cell lines with  two X chromosomes (47,XXY males and 46,XX) display a bimodal XIST expression, that significantly separates them in a high-expression and low-expression group based on Bayesian Information Criterion (BIC) (∆BIC = 25.5, Fig S00).
+
+ 
+Supplementary Figure X. XIST XY-scaled expression across cell lines. Each dot is a cell line. Colored dots represent those with expected XIST expression levels across XDS, i.e. low in cell lines with one X chromosome (blue and green) and high in lines with 2, 3 and 4 X chromosomes (yellow, orange and red dots respectively). Black dots represent 9 cell lines with observed expression lower than expected (∆BIC <<, see text).
+The distribution is unimodal in samples with more than two chromosomes, and they form a unique cluster with high XIST-expressing samples with two X chromosomes. Male XY samples, also show a bimodal distribution, with a group with higher XIST expression and variability variability (∆BIC), phenomenon previously described in the literature (ref) 
+To further evaluate the transcriptomic repercussion on cell lines with low XIST expression, we correlated it with expression levels of inactive genes. The inactive versus escapee status was annotated following the Gylemo 2025, with the only exception that XIST, annotated as escapee,  7 was not considered as escapee in the downstream analysis of this paper given its unique biology differentiating it from a classical escapee gene. To ensure that genes annotated inactive are actually being actively repressed rather than being genes not usually expressed in iPSC, we included in our analysis genes that we found to be expressed in previously reported iPSCs datasets (iPSCore dataset, 220 samples 8), by filtering out genes very low or ‘noise’ expression, Fig S0, {Methods} ). Samples with low XIST expression showed higher expression of inactive? genes (R2=0.21, padj= 0.03, Fig X), suggesting the possibility of erosion of these lines. This eroded lines were excluded from downstream transcriptomic analysesthe expression of genes expected to be subject to inactivation compared to escapees.  across …
+
+
+Figure 0. Mean expression of inactive and escapee genes across levels of XIST expression. 
+
+(( lets return to the bits above when we know re the imaging. for now, we can look at sections below based on your exclusions though ))
+
+#### **SCD-sensitive genes are mostly autosomal, but highly enriched on the sex chromosomes **
+
+We identified genes sensitive to sex chromosome dosage variation by analyzing the transcriptomic data derived from all iPSC lines passing quality control (Methods, n = `r NCOL(uneroded_se)`, Table S1). Given the X- (1,2,3,4) and Y- (0,1,2) chromosome dosage ranges represented in our dataset, we fit a mixed model of gene expression using linear and quadratic terms for XCD, a linear term for YCD and random effects for donor (Methods). Because `r NCOL(uneroded_se[,uneroded_se$Yn == 0])` of the iPSC lines in our dataset lacked a Y-chromosome, the linear estimate of YCD effects on expression of Y-linked genes potentially conflates the magnitude of basal expression from the Y chromosome (i.e. effect of YCD over the range 0 to 1) with the magnitude of differential expression between groups with 2 vs. 1 YCD (log2FCYCD2). We therefore only retained statistically significant linear YCD effects on expression of Y-chromosome genes if these were also accompanied by statistically significantly greater expression in samples with 2 vs. 1 Y-chromosomes (i.e. a non-zero log2FCYCD2 at FDR <0.05). 
+
+```{r}
+if(!exists('hg38_sig')) {
+hg38_sig <-
+  hg38_clean %>% lapply(dplyr::filter, is_sig == 'yes') #.$XCDQ_mm %>% nrow() #nrow(YCD_mm) #331 #XCDL 831 # 
+}
+
+```
+
+
+```{r union}
+hg38sig_union <- 
+  hg38_sig %>%
+  lapply(pull, gene_symbol) %>% # YCD doesn't have rownames
+    Venn() %>%
+    process_region_data() %>%
+    dplyr::filter(count > 0) %>%
+    mutate(name = str_replace_all(name, '/', '&'),
+    name = str_replace_all(name, '_', '\n'))
+```
+
+
+
+```{r Panel 1a euler, eval=FALSE}
+# P install euler
+hg38_euler <- 
+  hg38sig_union$count %>% 
+  purrr::set_names(hg38sig_union$name) %>%
+  euler()
+
+#hg38_euler_plot <- 
+  plot(
+    hg38_euler, 
+    quantities = TRUE, 
+    labels = FALSE,
+    fills = c('#7b329480','#c2a5cf80','#a6dba080') 
+    ) 
+
+```
+
+
+
+# rotate etc
+
+```{r proportions}
+
+hg38_proportions <- 
+  hg38_clean %>%
+    lapply(split.data.frame, ~is_sig) %>% unlist(recursive = FALSE) %>%
+    lapply(pull, gene_id) %>%
+    Venn() %>%
+    process_region_data() %>% 
+    unnest(item) %>%
+    mutate(
+      name = str_remove_all(name, 'hg38|_mm') , 
+      collapsed_name = case_when(
+        str_detect(name,'XCDL.yes/XCDQ.yes') ~ str_replace(name, 'XCDL.yes/XCDQ.yes', 'XCDQ.yes'),
+        str_detect(name,'XCDL.no/XCDQ.no/YCD.no') ~ str_replace(name, 'XCDL.no/XCDQ.no/YCD.no', 'not SCD'),
+        TRUE ~ name),
+      ds_profile = case_when(
+        str_detect(name,'XCDL.no/XCDQ.no/YCD.yes') ~ 'YCD only',
+        str_detect(name,'XCDL.no/XCDQ.yes/YCD.no|XCDQ.yes/YCD.no') ~ 'XCD quadratic', 
+        str_detect(name,'XCDL.no/XCDQ.yes/YCD.yes') ~ 'XCD quadratic & YCD',
+        str_detect(name,'XCDL.yes/XCDQ.no/YCD.no') ~ 'XCD linear only',
+        str_detect(name,'XCDL.yes/XCDQ.no/YCD.yes') ~ 'XCD linear & YCD',
+        TRUE ~ collapsed_name )) %>%
+   left_join(rowRanges(uneroded_se) %>% as.data.frame(), join_by('item' == 'gene_id')) %>%
+   mutate(short_tag = ifelse(str_starts(chr_tag, 'PAR'), 'PAR', chr_tag))
+     
+# hg38_proportions_plot <- 
+  hg38_proportions %>%
+    ggplot(aes(short_tag, fill = ds_profile)) +
+    geom_bar(position = 'fill') +
+    scale_fill_manual(
+      values = c('not SCD' = 'grey95',
+                 'XCD linear & YCD' = '#86758a',
+                 'XCD linear only' = '#b28dc0',
+                 'XCD quadratic' = '#d9c8e1' ,
+                 'XCD quadratic & YCD' = '#a9b4a9',
+                 'YCD only' = '#cbeac7')) +
+    scale_x_discrete(
+      labels = c(Autosome = 'Autosome', 
+                 X_link = 'X-linked',
+                 Y_link = 'Y-linked',
+                PAR = 'PAR'),
+      limits = c('Autosome', 'X_link', 'Y_link', 'PAR')) +
+    labs(x = '',
+         y = 'Proportion of\nSCD sensitive genes ',
+         fill = 'SCD profile') +
+    theme_classic() +
+    theme(axis.text.x = element_text(size = 13, angle = 45, vjust = 0.5),
+        axis.text.y = element_text(size = 13),
+        axis.title.y = element_text(size = 13),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 13)
+        )
+
+#DEG_proportions %>% dplyr::filter(chr_tag != 'Autosome' & ds != 'not SCD' ) %>% pull(ds) %>% table()
+```
+
+
+```{r sig counts}
+hg38_proportions %>% dplyr::filter(collapsed_name != 'not SCD') %>%
+  split.data.frame(~ ds_profile) %>%
+  lapply(unnest, 'item') %>%
+  bind_rows(.id = 'id2') %>%
+  ggplot(aes(fct_reorder(ds_profile, count, .desc = FALSE))) +
+  geom_bar(aes(fill = short_tag), position = position_stack(reverse = TRUE), alpha = 0.75) +
+  scale_fill_manual(values = chr_tag_val) +
+  geom_text(stat = 'count', aes(label = after_stat(count)), hjust = -0.5, size = 5) + 
+  ylim(0,750) +
+  theme_classic() +
+  theme(axis.title.x = element_text(margin = margin(t = '10'), size = 13),
+        axis.text = element_text(size = 13),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 13),
+        legend.position = 'inside',
+        legend.position.inside = c(0.67, 0.5)) +
+  labs(
+    x = 'SCD profile',
+    y = 'Number of DEGs',
+    fill = 'Genomic region'
+  ) +
+  coord_flip()
+```
+
+
+
+```{r}
+#| label: Panel1
+#| fig-cap: '**Types a...thing**. a) Thing. b) Other things.'
+```
+
+
+We detected a total of `r hg38_sig %>% bind_rows() %>% pull(gene_id) %>% unique() %>% length()` unique sex chromosome dosage (SCD) sensitive genes (FDR < 0.05, top genes in Table 1, full list in Table S1), across the three terms in this model (linear XCD, quadratic XCD, linear YCD)  (Fig. 1a). Of these, 96% (n = 2822) showed  linear XCD and/or YCD effect while 4% (n = 107) showed a quadratic XCD effect  (Fig. 1a). 
+
+@fig-scan
+
+
+Genes showing statistically significant SCD effects on their expression were not evenly distributed across the genome. Only 11% of autosomal genes expressed in our dataset were significantly SCD-sensitive (n = 2,645) compared to 27% of X-linked genes (n = 235),  59% of Y-linked genes (n = 24), and 84% of PAR genes (n = 26) (Fig. 1b). Thus, while the large majority (90%) of SCD-sensitive genes are located on the autosomes (Fig. 1c), SCD-sensitive genes are highly enriched on the sex chromosomes (Fig. 1c; Enrichment on sex chromosomes as a whole: Odds Ratio (OR) = 3.7, p = 1.34e-58;  X-chromosome OR = 3.1, p = 4.62e-40; Y-chromosome OR = 11.9, p = 1.09e-13; PAR OR = 43.8, p =  5.11e-21) (Fig S2).  Thus, in iPSCsーas in all prior cell types studied 9–11ーthe transcriptomic impacts of varying SCD are mostly autosomal, but disproportionately concentrated on the sex chromosomes themselvesーconsistent with direct cis-effects of dosage change on gene expression.
+
+
+
+Figure 1. Number, proportions, genomic regions, and effects on expression of major SCD sensitivity subtypes. (a) Euler diagram of SCD-sensitive genes by type of SCD effect (color coded) (b) Stacked bar plot for the proportion of genes in each genomic region [Autosomal, X-chromosome, Y-chromosome and pseudoautosomal region (PAR)] that are SCD-sensitive (color encodes the type of SCD sensitivity) (c) Stacked bar plot for the number of genes showing the each type of SCD sensitivity, colored be genomic region of origin. 
+
+Defining subtypes of SCD effect on sex chromosome gene expression 
+Given the enrichment of SCD effects on sex chromosome genes, we next examined these transcriptomic impacts in detailーsplitting SCD-sensitive sex chromosome genes (n = 285) by: the causal chromosome (pure XCD effect, pure YCD effect or joint sensitivity to XCD and YCD); the direction of SCD effect (positiveーincreasing expression with greater SCD, or negativeーdecreasing expression with greater SCD); andーfor XCD effectsーthe profile of this effect (linear vs. quadratic) (Fig 2a).
+
+
+
+
+Figure 2. Bar chart showing the count of SCD sensitive genes broken down by the causal chromosome(s) (XCD, YCD or both), the direction of effect (positive - increasing expression with greater SCD vs. negative), and the profile of SCD effect (linear vs, quadratic XCD effects), color coded by genomic region (X-linked - dark green, Y-linked - light green; PAR - pink) (e)  Dot and point-range plot showing mean sample-level expression values (dots, scaled to expression in XY) for genes showing each type of SCD profile. Sample expression values are organized by karyotype group and mean expression (point-ranges showing mean +/- s.e.m of expression per group).  
+
+For sex chromosome genes, the most common SCD sensitivity was a positive linear XCD effect (n = 123 genes; almost all X-linked; top genes PRKX, ZRSR2, LINC03077), followed by a negative linear YCD effect (n = 35; almost all X-linked; top genes PNMA6B, CSAG1 and RPS2P55), a positive linear YCD effect (n = 32; mostly Y-linked, but also including some X-linked genes and 1 PAR gene; top genes USP9Y, KDM5D, DDX3Y), a quadratic positive XCD effect (n = 31; all X-linked; top genes XIST, PUDP, GYG2) and a negative XCD linear effect (n = 24, all X-linked, top genes SLITRK2, EOLA1-DT, CLCN4)  (Fig. 2a).  We also detected 40 genes showing joint linear effects of both XCD and YCD: 23 showed joint positive linear effects (almost all PAR genes; top genes AKAP17A, DHRSX, GTPBP6); 12 joint negative linear effects (all X-linked genes; top genes SNORA70, the uncharacterized ENSG00000289122, CENPVL3); 2 genes showed a quadratic XCD effect combined with a positive linear YCD effect (the X-linked STS and the PAR genes PPP2R3B); 1 gene showed a quadratic XCD effect combined with a negative linear YCD effect (the X-linked gene STK26), and finally, 2 had opposing linear effects (MXRA5 and PIR: positive effects of XCD and negative effects of YCD). For each of the 7 major types of SCD effect on sex chromosome gene expression expression (Fig. 2a), we plotted the mean expression of all involved genes (scaled to their expression in XY samples as a reference) per sample to describe variation in their expression across karyotype groups (Fig. 2b). For example, genes with a negative linear XCD profile showed decreasing mean expression across karyotypes with mounting XCD, and genes sensitive to both XCD and YCD raised expression with a growing number of sex chromosomes (Fig. 2b). A gene-by-sample expression heatmap is provided for all 285 SCD sensitive sex chromosome genes in Fig. S3.
+
+
+
+Sex chromosome genes specifically sensitive to XCD 
+The 178 sex chromosome genes in our dataset that showed pure XCD effects on their expression (i.e. no sensitivity to YCD) were almost all X-linked, with the exception of XG (at the PAR boundary) and AL672277.1 (a PAR lncRNA) (Fig 2a). These 178 genes were collectively enriched (relative to all sex chromosome genes for) for several genomic features of note (Table S3), including: XCI escape genes (OR = 33.7, q = 3.11e-05), variable genes (OR = 3.7, q = 3.33e-04), X-linked gametologs (OR = 4.2, q = 8.84e-03). Conversely, they were depleted for genes that are subject to XCI (OR = 0.5, q = 4.58e-03) and lacking retained Y-homologs (OR O.2, q = 4.04e-04). No Gene Ontology (GO) terms were enriched against the sex chromosome background.
+  Most XCD effects on sex chromosome gene expression were linear (83%, n=146 genes), but 31 genes showed a positive quadratic XCD effect on expression, which could be further subdivided (by comparing the slope for each XCD level, Methods) into asymptotic (Fig 2a, left plot, n=6 ) vs. inverted-U (Fig 2a, right plot, n=25) quadratic effects. All genes with quadratic asymptotic effects increased their expression with each XCD gain, so peaked in expression at the maximal observed XCD of 4, whereas all genes with inverted-U quadratic effects showed peak expression at an XCD of 3 (with less expression at an XCD of 4). We therefore used the estimated log2 fold change in expression from XCD of 1 to 3 (log2FCXCD3) as a common metric for comparative analyses of dosage sensitivity across all 177 XCD-sensitive genes.
+Volcano plot visualizations for all 178 sex chromosome genes with pure XCD sensitivity (Fig 2b,c,d) highlighted XIST for its exceptionally high dosage sensitivity (Fig 2b), and showing the generally greater dosage sensitivity of genes with positive vs. negative XCD effects (Fig 2c,d). We used regression analysis (with standard error estimation robust to outliers, heteroskedasticity, and small sample sizes, Methods) to model potential predictors of inter-gene variation in XCD sensitivityーquantified as both absolute and signed log2FCXCD3ーamongst these XCD sensitive genes. Absolute log2FCXCD3 variation was significantly associated with (i) the profile of XCD sensitivity (F = 22.5, p =  2.2996e-12: highest for linear positive and inverted U, and lowest for linear negative genes), (ii) biotype (F = 6.6, p = 0.0003: highest for pseudogenes and lowest for protein coding), (iii) documented XCI status (F = 6.5, p = 0.0003, lowest for inactive genes), and (iv) non-linearly associated with basal expression level in X- monosomy samples (R2 = 0.08, p = 0.0008) (Fig 2e,g; Table S3, S4). Signed log2FCXCD3 was associated with the profile  of XCD sensitivity (F = 112.9, p-value: < 2.2e-16: higher for linear positive and inverted U, and lowest for linear negative genes), (ii) biotype (F = 5.8, p = 0.0006: highest for pseudogenes and lowest for protein-coding), (iii) XCI status (F = 6.8, p-value: 0.0002: lowest for inactive than variable and unnanotated genes), and (iv) non-linearly associated to basal expression in monosomic samples (R2 = 0.09, p = 3e-04) (Fig 2f,h; Table S3, S4). Given the association between potential predictors of XCD sensitivity (F = 7.177,  p = 2.3e-09, Table S6), we combined all of these predictors in a single multivariate model of log2FCXCD3 (variation across X-linked genes, excluding XIST given its extreme log2FCXCD3 value and its peculiar biological behavior) and evaluated effects sizes with variance partitioning analysis (Methods). Under this approach, basal expression on X-chromosome genes (from X,45; XY,46; and XYY,47 X-monosomic samples) was the strongest individual predictor accounting for ~ 30% of explained variance of absolute and signed log2FCXCD3 sensitivity (Fig. S4a,b). To evaluate if low Xa expression is a generalizable predictor of higher dosage sensitivity, independently of intra-sample coupling, we confirmed this relationship against the 2 to 3 XCD contrasts (absolute sensitivity R2 = 0.05, p = 0.007; signed sensitivity R2 = 0.07,  p  = 0.001), and also we cross-validated the prediction in an independent dataset ーXY samples in iPSCore datasetー tested with a model fit with all monosomic samples (R2 = 0.17, p = 6.2e-09 for absolute; R2 = 0.16, p = 6.127e-08 for signed) and for male samples only (R2 = 0.33, p < 2.2e-16 for absolute; R2  = 0.29,  p= 1.15e-14 for signed variation) suggesting that sex is relevant in modulating this predictor. Interestingly, this and the other significant categorical predictors (protein-coding, inactive status) were negatively associated with XCD sensitivity (Fig. S4a,b). Supplementary analyses extending this linear regression modelling of signed and absolute log2FCXCD3 variation to all 865 X-linked genes expressed in our dataset positioned escape genes as the ones with top XCD sensitivity amongst X-chromosome genes, and also highlighted the extreme negative response of snoRNAs, driven by SNORA70, and X-linked snoRNA sensitive to SCD (Table S5). 
+
+
+Figure 3. Profiles of XCD and factors impacting response variation. a) Mean XY-scaled expression of non-linear genes with asymptotic (left) or Inverted U profile (right) of response to incremental XCD. Dots indicate peak mean expression. b) Volcano plot of log2FCXCD3 and p-values of all genes sensitive to XCD c) Volcano plot zoom on genes with positive linear responses. Genes with linear responses are depicted as circles and quadratic as diamonds. Non-DEG genes are shown in grey, genes sensitive to YCD and YCD + XCD are excluded from the visualization. Top genes (pi-score) are labeled, gametologs in bold. d) Volcano plot zoom on negative responses. Note different scales for negative and positive effects. e,f) Estimated marginal means (dot) and CI (line) for  e) absolute and f) signed log2FCXCD3 from univariate (circle, solid lines), and multivariate models. F-values from univariate models are displayed. g, h) mean basal expression in the active X chromosome of XO, XY and XYY samples. 
+Taken together these analyses reveal a hitherto underappreciated pattern of non-linear expression changes in some highly dosage sensitive X-linked genes to mounting XCD and show that in iPSCs - as in other cell types 9,12 - high XCD sensitivity is predicted by low basal expression in on the X-chromosome in a non-linear fashion, which is partially correlated with biotype and XCI status. 
+
+Sex chromosome genes specifically sensitive  to YCD 
+
+Most of the 67 sex chromosome genes sensitive to pure YCD effects (i.e. without accompanying significant XCD effect on expression) resided on the X-chromosome (61%. n=41). Howeverーas expectedーYCD sensitive genes as a set were highly enriched for those residing on the Y-chromosome (n = 24: OR 222.3, p = 1.49e-26) which displayed exclusively positive YCD effects on their expression. Most of the 41 X-chromosome genes sensitive to YCD showed negative linear YCD effects in their expression (n=34; top genes PNMA6B, RPS2P55, CSAG1), but several showed positive linear YCD effects (n=7; TEX11, SLC6A8, NAP1L6P, MAGEB1, CRIPTO3, CROCCP1 and the novel lncRNA ENSG00000287160).  Only two PAR genes were YCD but not XCD sensitive (SHOX with a positive linear profile, and VAMP7ーa negatively regulated PAR2 gene). We used log2FCYCD2 (the fold  change in expression between 1 and 2 Y-chromosomes) as a common metric for visualization and analyses of variation in YCD dosage sensitivity across all 67 YCD-sensitive genes (Fig 4a,b). 
+
+
+Figure 4. Genes sensitive to YCD. a) Volcano plot depicting log2FCYCD2 and padjYCD2 of all genes YCD sensitivity (inset) and zoom-in on genes with positive YCD sensitivity (main plot, red box in inset). b) Comparison of dosage sensitivity among gametolog pairs (Y-gametolog log2FCYCD2 of and  X-gametolog log2FCXCD2 ).
+
+Compared to all expressed Y-chromosome genes in our dataset, those showing positive YCD effects were 6-fold enriched for gametologs (CI = 1.04-66.5, p = 0.0391). Thus - in line with prior studies of other cell and tissue types 9,12 - both positive YCD and positive XCD cis-effects on gene expression highlight Y-chromosome gametologs for their prominent dosage sensitivity (Table S3). The Y-linked genes most sensitive to the πYCD2 variation  were the gametologs KDM5D, USP9Y, EIF1AY and DDX3Yーwhich have been highlighted for their extreme YCD sensitivity in studies of diverse other cell types 9,14–16. Given the convergence between the gametolog pair preservation and YCD dosage sensitivity, and ongoing debates regarding the functional homology between X- and Y-linked members of each gametolog pair 13, we asked if there was concordance in the relative strengths of cis effects for XCD and YCD (indexed by observed log2FC between chromosoπmal dosage of 1 and 2  - logFCXCD2 and logFCYCD2, respectively) across all X gametolog pairs with both members expressed in our dataset (Fig 2b). This comparison revealed that for all gametolog pairs, the Y-member was more sensitive to mounting YCD than the X-member was to mounting XCD. Moreover, we observed little correlation across gametolog pairs between the relative dosage sensitivity of their X- and Y-linked members - due to much less variability in YCD sensitivity amongst Y-linked members than in XCD sensitivity amongst X-linked members. This finding is consistent with the known variable strength of XCI escape amongst X-linked gametologs 13.
+Given the observation of significant linear YCD effects in the expression of several (n=41) X-linked genes, we asked if these genes differed from non-YCD sensitive X-chromosome genes in biotype, XCI status and preserved Y-chromosome homologue. We found that YCD sensitive X-linked genes are enriched in protein-coding genes compared with other non-coding biotypes (OR = 2.5, p = 0.0353). We also found a  positive relationship between the relative YCD vs XCD sensitivity of these 41 genes (R2 = 0.11, p = 0.01937) and across all X-linked genes (R2 = 0.2569, p < 2.2e-16).
+
+Taken together, these results reinforce the concept that even though more genes are responsive to XCD variations, YCD asymmetrically suppresses X-linked gene expression, while XCD shows milder mostly upregulating cis-effects and not effects in Y-linked genes.
+
+
+
+
+Genes sensitive to both XCD and YCD
+
+Of the 37 sensitive sex chromosome genes with concordant linear effects of both  XCD and YCD (Fig 1a), 25 showed positive effects (almost all of which were on the PAR1 region that is shared between the X- and Y-chromosome), and 12 showed negative effects (all of which were X-linked genes). We found evidence of correlated YCD and XCD sensitivity amongst the X-linked but not the PAR genes (using logFCXCD2 vs. logFCYCD2 correlation, Methods, Fig 5)ーreflecting relatively low inter-gene variability in the magnitude of their YCD sensitivity alongside more variability in their relative XCD sensitivity. The small sample size of X-linked genes sensitive to negative linear effects of both XCD and YCD limited the statistical power of enrichment analysis, but all of them were subject to XCI (when annotation available) and they had a high proportion of protein coding genes (75%). The only non-coding genes were SNORA70- a small nucleolar RNA  (snoRNA) involved in RNA processing, LINC01278, a long intergenic ncRNA associated with cancer, and the uncharacterized lncRNA ENSG00000289122.2. SNORA70 was the gene with the most pronounced negative SCD effects. 
+
+
+
+Fig 4. Overall sex chromosome sensitivity of genes upregulated by sex chromosome dosage. a) Each dot in this dotplot represents one PAR gene, and its dosage sensitivity (log2FoldChange increases across the same 2 to 1 interval of XCD and YCD). b)  Zoom in on X-linked genes
+
+
+
+
+SCD effect on autosome gene expression 
+11% of autosomes (n = 2645) presented responses to SCD that varied in their profile according to chromosome of origin, the direction of the SCD effect andーfor XCD effectsーthe profile of this effect (linear vs. quadratic). Similar to sex chromosomes, most autosomes showed linear responses and were mostly sensitive to XCD, followed by YCD and shared XCD and YCD (Fig 5a). The less frequent quadratic responses, mainly involved a U pattern (
+
+
+
+
+
+before ppi, functional analysis (go enrichment on each block)
+TF binding site enrichment on each set
+look at independent publications of gene coexpression networks in male and female iPSCs (are sex chromosome genes co-expressed between individuals showing the same modules of autosomal genes? )
+Network and functional analysis 
+Take each set (1 of the eight patterns of autosomal genes and expand 1 neighbor debor, take top 3 connected components, test those components for sex chromosome genes
+
+
+
+Supplementary Figures
+
+S1. Determination of basal gene expression of our differentially expressed genes on iPSC reference dataset
+ 
+
+
+
+Fig S1. selection of expressed genes in iPSCs
+
+
+
+
+
+
+
+Fig S2. Overall genomic density of all differentially expressed genes (red) plotted against genomic density of non-DE genes (grey).
+
+
+Fig S3. Heatmap of scaled expression levels of the 284 SCD sensitive sex chromosome genes across the 82 lines in our dataset (three genes with opposite sensitivity not shown). In females, Y-chromosome expression is shown in grey. 
+
+
+
+
+
+
+
+Fig Sxx. Non-linear XCD sensitive genes stratified by sex. Right column genes display a quadratic effect in females. The left column are genes that display quadratic behavior in males.
+
+
+
+
+
+
+Fig S4a. Multivariate analysis. Absolute dosage sensitivity (log2FCxcd1to3)
+
+
+
+
+
+Fig S4b. Multivariate analysis. Signed dosage sensitivity (log2FCxcd1to3)
+
+
+
+
+Figure S5. Relationship between the relative YCD vs XCD sensitivity (log2FCSCD2). (a) X-linked genes sensitive to YCD. (b) all X-linked expressed X-linked genes. 
+
+
+
+
+Fig S6. Overall sex chromosome sensitivity of genes upregulated by sex chromosome dosage. a) Each dot in this dotplot represents a gene, and its dosage sensitivity (log2FoldChange increases across the same 2 to 1 interval of XCD and YCD). b)  Zoom in on X-linked genes
+
+
+
+Fig SX. Correlation between basal average expression in X monosomic samples and  linear log2FCs (1to3 XCD)
+
+
+
+
+
+Fig SX. Set Y-linked genes with positive YCD effects. a. Mean gene expression in samples with 0, 1 and 2 X chromosomes. b. Scatter plot of genes basal expression (samples with  YCD of 1) and  lof2FC between 2 and 1 Y-chromosome count. Each dot represents an individual basal expression per gene per sample, and a common log2FC value per group.  c)  Scater plot of log2FC in contrasts 1 to 0 (x axis) and 2 to 1(y axis)
+
+
+
+
+Fig SXXX. Categories enriched in ranked GSEA analysis
+
+
+
+
+Fig SXX. Treemap of Go terms enriched in XCD sensitive genes. a) cellular components b) biological process
+
+Supplementary tables
+ 
+
+
+Table 1a. Top sensitive genes to X dosage with linear response, ranked by π-score.
+Table 1b. Top sensitive genes to X dosage with quadratic response, ranked by π-score.
+Table 2. Top sensitive genes to Y dosage with linear response ranked by π-score.
+
+
+group
+n
+estimate
+p
+conf.low
+conf.high
+method
+alternative
+p.adj
+p.adj.signif
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ncRNA
+830
+1.3091278
+4.76e-01
+0.62349674
+2.5907414
+Fisher's Exact test
+two.sided
+1.00e+00
+ns
+protein-coding
+830
+1.1190595
+5.84e-01
+0.76918120
+1.6436535
+Fisher's Exact test
+two.sided
+1.00e+00
+ns
+pseudo
+830
+1.2366138
+5.86e-01
+0.57254653
+2.4981093
+Fisher's Exact test
+two.sided
+1.00e+00
+ns
+unannotated
+830
+0.6980378
+1.33e-01
+0.42661236
+1.1103251
+Fisher's Exact test
+two.sided
+5.32e-01
+ns
+escape
+806
+33.7273450
+7.78e-06
+4.61738815
+1476.3034553
+Fisher's Exact test
+two.sided
+3.11e-05
+****
+inactive
+806
+0.5433168
+2.29e-03
+0.35545951
+0.8159580
+Fisher's Exact test
+two.sided
+4.58e-03
+**
+variable
+806
+3.7101055
+1.11e-04
+1.85727282
+7.3934964
+Fisher's Exact test
+two.sided
+3.33e-04
+***
+no XCI call
+806
+0.9614064
+8.60e-01
+0.67249291
+1.3807074
+Fisher's Exact test
+two.sided
+8.60e-01
+ns
+X_gametolog
+806
+5.6725133
+2.02e-04
+2.09235492
+16.2790205
+Fisher's Exact test
+two.sided
+4.04e-04
+***
+no_g
+806
+0.1762887
+2.02e-04
+0.06142876
+0.4779304
+Fisher's Exact test
+two.sided
+4.04e-04
+***
+
+
+Table S3. Categories enriched in XCD sensitive genes.
+
+
+(v) not associated with the retention vs. loss of a Y-chromosome copy of the gene (same for X-linked gametologs than non-gametologs (F = 0.05, p = 0.8) (Fig 3e), v) not associated with the distance from telomere (p = 0.9) (Fig 3i), and
+(iv) did not differ between X-linked gametologs and no gametologs (F = 0.15, p = 0.7) (Fig 3f), (v) was not associated with the distance from telomere (p = 0.8) (Fig 3j) and (vi) was negatively associated to basal expression in monosomic samples (F = 20.7, R2 = 0.12, t = -4.5, p = 1.02e-05),(Fig 3h). 
+
+Table SX. All univariate XDS results.
+
+
+
+
+
+Methods
+Note with robust standard errors (HC3) and post-hoc Games–Howell comparisons to account for heteroskedasticity, small sample sizes and outliers 
+
+
+
+
+References
+1.	Rivetti di Val Cervo, P., Besusso, D., Conforti, P. & Cattaneo, E. hiPSCs for predictive modelling of neurodegenerative diseases: dreaming the possible. Nat. Rev. Neurol. 17, 381–392 (2021).
+2.	Sharma, A., Sances, S., Workman, M. J. & Svendsen, C. N. Multi-lineage human iPSC-derived platforms for disease modeling and drug discovery. Cell Stem Cell 26, 309–329 (2020).
+3.	Beers, J. et al. A cost-effective and efficient reprogramming platform for large-scale production of integration-free human induced pluripotent stem cells in chemically defined culture. Sci. Rep. 5, 11319 (2015).
+4.	Mekhoubad, S. et al. Erosion of dosage compensation impacts human iPSC disease modeling. Cell Stem Cell 10, 595–609 (2012).
+5.	Topa, H., Benoit-Pilven, C., Tukiainen, T. & Pietiläinen, O. X-chromosome inactivation in human iPSCs provides insight into X-regulated gene expression in autosomes. Genome Biol. 25, 144 (2024).
+6.	Brenes, A. J. et al. Erosion of human X chromosome inactivation causes major remodeling of the iPSC proteome. Cell Rep. 35, 109032 (2021).
+7.	Gylemo, B., Bensberg, M. & Nestor, C. E. A whole-organism landscape of X-inactivation in humans. Elife 14, (2025).
+8.	Arthur, T. D. et al. Multi-omic QTL mapping in early developmental tissues reveals phenotypic and temporal complexity of regulatory variants underlying GWAS loci. bioRxivorg (2024) doi:10.1101/2024.04.10.588874.
+9.	Liu, S. et al. Aneuploidy effects on human gene expression across three cell types. Proc. Natl. Acad. Sci. U. S. A. 120, e2218478120 (2023).
+10.	San Roman, A. K. et al. The human Y and inactive X chromosomes similarly modulate autosomal gene expression. Cell Genom. 4, 100462 (2024).
+11.	Blanton, L. V. et al. Stable and robust Xi and Y transcriptomes drive cell-type-specific autosomal and Xa responses in vivo and in vitro in four human cell types. Cell Genom. 4, 100628 (2024).
+12.	Raznahan, A. et al. Sex-chromosome dosage effects on gene expression in humans. Proc. Natl. Acad. Sci. U. S. A. 115, 7398–7403 (2018).
+13.	DeCasien, A. R., Tsai, K., Liu, S., Thomas, A. & Raznahan, A. Evolutionary divergence between homologous X-Y chromosome genes shapes sex-biased biology. Nat. Ecol. Evol. 9, 448–463 (2025).
+14.	Suntharalingham, J. P. et al. The transcriptomic landscape of monosomy X (45,X) during early human fetal and placental development. Commun. Biol. 8, 249 (2025).
+15.	Astro, V. et al. An iPSC-based model of Jacob Syndrome reveals a DNA methylation-independent transcriptional dysregulation shared with X aneuploid cells. bioRxiv (2024) doi:10.1101/2024.06.18.598378.
+16.	Legue, M. et al. Sex chromosome aneuploidy impacts on human gene expression and regulation: a systematic review. Mol. Med. (2025) doi:10.1186/s10020-025-01404-1.
+17.	Sapkota, H., Wren, J. D. & Gorbsky, G. J. CSAG1 maintains the integrity of the mitotic centrosome in cells with defective p53. J. Cell Sci. 133, jcs239723 (2020).
+
+
+
+
+
