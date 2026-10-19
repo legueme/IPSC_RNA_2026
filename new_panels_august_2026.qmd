@@ -1,0 +1,4104 @@
+---
+title: "New pannels august 2026"
+format: html
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+here::i_am("IPSC_SCA.Rproj")
+
+#library(knitr)
+library(tidyverse)
+library(here)
+library(openxlsx2)
+library(SummarizedExperiment)
+library(DESeq2)
+library(ggVennDiagram)
+library(khroma)
+library(patchwork)
+library(ggrepel)
+library(eulerr)
+##library(grid) # weird is supposedly to be loadad with patchwork
+library(gprofiler2)
+library(fgsea)
+library(estimatr)
+library(rstatix)
+library(emmeans)
+library(splines2) # note, I updated from 'splines ' so need to update de code too
+library(relaimpo)
+
+```
+
+```{r load}
+if (!exists('uneroded_se')) {
+ uneroded_se <- read_rds(here('../SDN_Multiomic/uneroded_se.rds'))
+}
+
+if (!exists('hg38_dge')) {
+  hg38_dge <- read_rds('hg38_dge.rds')
+} #  created in benchmarck file
+
+if(!exists('hg38_mm')) {
+hg38_mm <- readRDS('hg38_mm.rds')
+} #  created in benchmarck file
+
+if(!exists('Xf_vobj')) {
+Xf_vobj <- readRDS('Xf_vobj.rds')
+}
+
+if(!exists('gen49_uneroded')) {
+gen49_uneroded <- readRDS('gen49_uneroded.rds')
+}
+
+if(!exists('hg38_vobj')) {
+  hg38_vobj <- readRDS('hg38_vobj.rds')
+}
+
+if(!exists('hg38Xf_mm')) {
+hg38Xf_mm <- readRDS(here('hg38Xf_mm.rds'))
+}
+
+
+if(!exists('hg38Yf_fit')){
+hg38Yf_mm <-readRDS('hg38Yf_mm.rds')
+}
+
+
+if(!exists('Xf_fit')) {
+  Xf_fit <- readRDS(here('Xf_fit.rds'))
+}
+
+hg38Xf_2to1 <- variancePartition::topTable(Xf_fit, coef = 'XCD_F2', number = Inf) 
+
+sexchr_patterns <- read_rds('sexchr_patterns.rds') |> ungroup()
+aut_patterns <- read_rds('aut_patterns.rds') |> ungroup()
+gen50_ensg <- read_tsv('gen50_genes.tsv') %>% mutate(ENSG_id = str_extract(gene_id, '^[^.]+'))
+
+all2to1 <- readRDS('all2to1.rds')
+
+path_list <- 
+  read_rds('path_list.rds')
+
+
+chr_tag_val <-   
+  color("muted")(4) %>% 
+  setNames(
+    c(sexchr_patterns$short_tag, aut_patterns$short_tag) %>% 
+      unique() %>% 
+    sort(decreasing = TRUE))
+```
+
+
+```{r}
+
+XY_names <- uneroded_se$names[uneroded_se$karyotype == 'XY'] #is same than karyotype or is unfixed?
+XY_means <- hg38_vobj$E[, XY_names] |> rowMeans()
+XY_sds <-  hg38_vobj$E[, XY_names] |> apply(1, sd)
+XYz_mx <-  ((hg38_vobj$E - XY_means) / XY_sds ) %>%  `rownames<-`(str_extract(rownames(.), '^[^.]+' ))
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+sexchr_patterns_clean <- 
+    sexchr_patterns |>
+    left_join(gen50_ensg, by = 'ENSG_id') |>
+    mutate(
+      shortbio = case_when(
+        gene_type == 'protein_coding' ~  'protein-coding',
+        gene_type == 'lncRNA' ~  'lncRNA',
+        str_detect(gene_type, 'pseudo') ~ 'pseudogene',
+        .default = 'other')
+    )|>
+    dplyr::filter(shortbio != 'other') 
+```
+
+```{r}
+sexchr_patterns_clean$name  |> table() #length() + #
+aut_patterns_clean$name |> table() #length() #
+```
+```{r}
+    sexchr_patterns |>
+    left_join(gen50_ensg, by = 'ENSG_id') |>
+    mutate(
+      shortbio = case_when(
+        gene_type == 'protein_coding' ~  'protein-coding',
+        gene_type == 'lncRNA' ~  'lncRNA',
+        str_detect(gene_type, 'pseudo') ~ 'pseudogene',
+        .default = 'other')
+    )|>
+    dplyr::filter(shortbio == 'other') 
+```
+
+
+```{r}
+aut_patterns_clean <- 
+    aut_patterns |>
+    left_join(gen50_ensg, by = 'ENSG_id') |>
+    mutate(
+      shortbio = case_when(
+        gene_type == 'protein_coding' ~  'protein-coding',
+        gene_type == 'lncRNA' ~  'lncRNA',
+        str_detect(gene_type, 'pseudo') ~ 'pseudogene',
+        .default = 'other')
+    )|>
+    dplyr::filter(shortbio != 'other') 
+```
+
+```{r}
+bind_rows(
+  aut_patterns_clean,
+  sexchr_patterns_clean
+) %>% .$ds |> table()
+```
+```{r}
+694-18
+```
+
+
+#######panel 1##########
+
+
+```{r union}
+hg38_clean50 <- 
+  
+  hg38_mm |>
+  lapply(function(x) { x |>
+    rownames_to_column('gene_id') |>
+    left_join(
+      rowRanges(uneroded_se) |> as.data.frame() |> dplyr::select(where(~!all(is.na(.x)))),
+      by = 'gene_id') |>
+    left_join(
+      gen50_ensg, 
+      by = 'ENSG_id') |>
+    mutate(
+      is_sig = case_when(
+      seqnames.x != 'chrY' & adj.P.Val <= 0.05 ~ 'yes', 
+      seqnames.x == 'chrY' & adj.P.Val <= 0.05 & sig2to1 == 'yes' ~ 'yes',
+      TRUE ~ 'no'),
+      short_bio = case_when(
+        str_detect(gene_type, 'protein') ~ 'protein-coding',
+        str_detect(gene_type, 'lncRNA') ~ 'lncRNA',
+        str_detect(gene_type, 'pseudo') ~ 'pseudogene',
+        TRUE ~ 'other')
+      )|>
+    dplyr::filter(seqnames.x != 'chrM' & short_bio != 'other')
+  })
+
+
+hg38_sig <-
+  hg38_clean50  %>% lapply(dplyr::filter, is_sig == 'yes') #.$XCDQ_mm %>% nrow() #nrow(YCD_mm) #331 #XCDL 831 # 
+
+
+hg38sig_union <- 
+  hg38_sig %>%
+  lapply(pull, gene_symbol) %>% # YCD doesn't have rownames
+    Venn() %>%
+    process_region_data() %>%
+    dplyr::filter(count > 0) %>%
+    mutate(name = str_replace_all(name, '/', '&'),
+    name = str_replace_all(name, '_', '\n'))
+```
+```{r}
+hg38_clean50$hg38XCDL_mm |> dplyr::filter(str_detect(gene_type, 'pseudo'))
+```
+
+```{r}
+16239/23741
+5156/23741
+1453/23741
+
+23741-(16239 + 5156 + 1453)
+
+893/23741
+
+
+  
+  1017/22848 * 100
+```
+```{r}
+(bind_rows(
+  aut_patterns_clean,
+  sexchr_patterns_clean
+) |>
+  dplyr::filter(short_tag == 'PAR') |> 
+  nrow() ) / 
+
+(  hg38_clean50$hg38XCDL_mm |> dplyr::filter(str_detect(chr_tag,'PAR')) |> nrow() )
+
+857/1017
+```
+
+
+
+```{r Panel 1a euler}
+
+hg38_euler <- 
+  hg38sig_union$count %>% 
+  purrr::set_names(hg38sig_union$name) %>%
+  euler()
+
+hg38_euler_plot <- 
+  plot(
+    hg38_euler, 
+    quantities = TRUE, 
+    labels = FALSE,
+    fills = c('#7b329480','#c2a5cf80','#a6dba080') 
+    ) 
+
+```
+
+```{r Fig 1a euler rotated}
+
+pdf('thing.pdf')
+library(cowplot)
+rotate.text <- 
+function(grob, angle) {
+  if (inherits(grob, 'text')) {
+      grob$rot <- angle
+  }
+  if (!is.null(grob$children)) {
+      grob$children <- lapply(grob$children, rotate.text, angle = angle)
+  }
+  if (!is.null(grob$grobs)) {
+      grob$grobs <- lapply(grob$grobs, rotate.text, angle = angle)
+  }
+  grob
+}
+
+
+plot(
+    hg38_euler, 
+    quantities = TRUE, 
+    labels = FALSE,
+    fills = c('#7b329480','#c2a5cf80','#a6dba080') 
+    #legend = list(side = 'right'), 
+    )
+
+g <-  grid::grid.grab()
+angle <- -220
+g_rotated <- rotate.text(g, angle = angle)
+  
+grid::grid.newpage()
+
+pushViewport(viewport(angle = -angle, clip = 'off', height = 0.9))
+grid.draw(g_rotated)
+popViewport() %>%
+  wrap_elements()
+
+g_rot <- 
+  grobTree(
+    g_rotated, vp = viewport(angle = -angle)
+  )
+
+p_rot <- #uses cowplot
+ ggdraw() +
+ draw_grob(g_rot, width = 1.1, height = 1.1, x = -0.29, y = -0.1, clip = 'on', scale = 1.05) +
+  draw_label('linear\nYCD', x = -0.2, y = 0.15, size = 13) +
+  draw_label('linear\nXCD', x = -0.27, y = 0.78, size = 13) +
+  draw_label('quadratic\nXCD', x = -0.27, y = 0.34, size = 12)
+
+dev.off()
+```
+  
+```{r}
+
+```
+
+
+```{r proportions WIP}
+#| fig-height: 5
+#| fig-width: 8
+
+hg38_proportions50 <- 
+  hg38_clean50 %>%
+    lapply(split.data.frame, ~is_sig) %>% unlist(recursive = FALSE) %>%
+    lapply(pull, ENSG_id) %>%
+    Venn() %>%
+    process_region_data() %>% 
+    unnest(item) %>%
+    left_join(hg38_clean50$hg38XCDL_mm, join_by('item' == 'ENSG_id')) %>%
+    mutate(
+      name = str_remove_all(name, 'hg38|_mm') , 
+      collapsed_name = case_when(
+        str_detect(name,'XCDL.yes/XCDQ.yes') ~ str_replace(name, 'XCDL.yes/XCDQ.yes', 'XCDQ.yes'),
+        str_detect(name,'XCDL.no/XCDQ.no/YCD.no') ~ str_replace(name, 'XCDL.no/XCDQ.no/YCD.no', 'not SCD'),
+        TRUE ~ name),
+      ds_profile = case_when(
+        str_detect(name,'XCDL.no/XCDQ.no/YCD.yes') ~ 'YCD only',
+        str_detect(name,'XCDL.no/XCDQ.yes/YCD.no|XCDQ.yes/YCD.no') ~ 'XCD quadratic', 
+        str_detect(name,'XCDL.no/XCDQ.yes/YCD.yes') ~ 'XCD quadratic & YCD',
+        str_detect(name,'XCDL.yes/XCDQ.no/YCD.no') ~ 'XCD linear only',
+        str_detect(name,'XCDL.yes/XCDQ.no/YCD.yes') ~ 'XCD linear & YCD',
+        TRUE ~ collapsed_name )) %>%
+   
+   mutate(
+     short_tag = ifelse(str_starts(chr_tag, 'PAR'), 'PAR', chr_tag))
+```
+
+```{r}
+write_tsv(hg38_proportions50, 'hg38_proportions50.tsv')
+```
+
+
+```{r proportions plot}
+pdf('proportions.pdf', compress = FALSE)
+#hg38_proportions_plot <- 
+  hg38_proportions50 %>%
+    ggplot(aes(short_tag, fill = ds_profile)) +
+    geom_bar(position = 'fill') +
+    scale_fill_manual(
+      values = c('not SCD' = 'grey95',
+                 'XCD linear & YCD' = '#86758a',
+                 'XCD linear only' = '#b28dc0',
+                 'XCD quadratic' = '#d9c8e1' ,
+                 'XCD quadratic & YCD' = '#a9b4a9',
+                 'YCD only' = '#cbeac7')) +
+    scale_x_discrete(
+      labels = c(Autosome = 'Autosome', 
+                 X_link = 'X-linked',
+                 Y_link = 'Y-linked',
+                PAR = 'PAR'),
+      limits = c('Autosome', 'X_link', 'Y_link', 'PAR')) +
+    labs(x = '',
+         y = 'Proportion of\nSCD sensitive genes ',
+         fill = 'SCD profile') +
+    theme_classic() +
+    theme(axis.text.x = element_text(size = 13, angle = 45, vjust = 0.5),
+        axis.text.y = element_text(size = 13),
+        axis.title.y = element_text(size = 13),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 13)
+        )
+
+#hg38_proportions50$ds_profile |> table()
+dev.off()
+```
+
+
+```{r sig counts}
+#| fig-height: 5
+#| fig-width: 8
+
+sig_count_plot <- 
+hg38_proportions50 %>% # pull(ds_profile) %>% table()
+  dplyr::filter(ds_profile != 'not SCD' & ds_profile != 'XCD quadratic & YCD') %>%
+  split.data.frame(~ ds_profile) %>%
+  lapply(unnest, 'item') %>%
+  bind_rows(.id = 'id2') %>%
+  ggplot(aes(fct_reorder(ds_profile, count, .desc = FALSE))) +
+  geom_bar(aes(fill = short_tag), position = position_stack(reverse = TRUE), alpha = 0.75) +
+  scale_fill_manual(values = chr_tag_val) +
+  geom_text(stat = 'count', aes(label = after_stat(count)), hjust = -0.5, size = 5) + 
+  ylim(0,750) +
+  theme_classic() +
+  theme(axis.title.x = element_text(margin = margin(t = '10'), size = 13),
+        axis.text = element_text(size = 13),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 13),
+        legend.position = 'inside',
+        legend.position.inside = c(0.77, 0.4)) +
+  labs(
+    x = 'SCD profile',
+    y = 'Number of DEGs',
+    fill = 'Genomic region'
+  ) +
+  coord_flip()
+```
+
+
+```{r, include=FALSE}
+hg38_proportions %>% dplyr::filter(str_detect(name, 'XCDQ.yes') & str_detect(name, 'YCD.yes') )
+```
+
+```{r new_panel1}
+
+#| fig-height: 11
+#| fig-width: 17
+pdf('Fig1test.pdf')
+
+#jpeg('Fig1.jpeg', height = 7.6, width = 11, units = 'in', res = 600)
+prop_legend <- get_legend(hg38_proportions_plot)
+#count_legend <- get_legend(sig_count_plot)
+
+p_rot + theme(plot.margin = margin(0,-10, 0, -10, "cm")) +labs(tag = 'a') + 
+hg38_proportions_plot + theme(legend.position = 'none', plot.margin = margin(0,1.5, 0, -20, "cm")) + labs(tag = 'b') +
+wrap_elements(prop_legend) + theme(plot.margin = margin(0,1.5, 0, 0, "cm")) +
+sig_count_plot + #theme(legend.position = 'none') + 
+  labs(tag = 'c') +
+#count_legend + 
+  plot_layout(design = '112223
+                        444444'
+
+            ) 
+
+dev.off
+```
+```{r}
+hg38_proportions50$ds_profile |> table()
+```
+```{r}
+691-15
+```
+####### For panel 2 #######
+
+```{r sexchr dir}
+
+sexchr_dirs  <- 
+  sexchr_patterns_clean %>% 
+  dplyr::count(ds, profile, dir, short_tag) %>%
+  mutate(
+    dir_count = case_when(dir == 'negative' & profile == 'linear' ~ -n, .default = n),
+    count_dir = ifelse(dir_count > 0, 'pos', 'neg'),
+    ds_mode = case_when(
+               ds == 'YCD' ~ ds,
+    #            paste0(ds, mode),
+    #            ds == 'X + Y' ~ 'XDS + YDS',
+               .default = paste0(ds, ' ', profile)
+               ),
+    short_tag = ordered(short_tag, levels = c('PAR', 'Y_link', 'X_link'))
+  ) %>% 
+  group_by(ds_mode, count_dir) %>%
+  mutate(ds_count = sum(n)) %>%
+  dplyr::filter(ds_mode != 'YCD + XCD linear opposite') %>%
+  dplyr::filter(ds_mode != 'YCD + XCD quadratic') %>% 
+  mutate(cond_count = ifelse(row_number() == n(), ds_count, NA)) %>%
+    arrange(short_tag) 
+       
+```
+
+
+```{r sexchrdirsplot}
+
+
+#sexchr_dirs_plot <-
+  sexchr_dirs %>%
+  ggplot(aes(dir_count, ds_mode)) +
+  geom_col(aes(fill = short_tag), alpha = 0.80) +
+  geom_text(aes(label = cond_count), 
+           data = sexchr_dirs[sexchr_dirs$count_dir == 'pos' & 
+                              (#sexchr_dirs$ds_mode != 'YCD' & 
+                               sexchr_dirs$ds_mode != 'YCD + XCD linear'), ],
+           position = position_nudge(x = 10) ) +
+  geom_text(aes(label = cond_count), 
+            data = sexchr_dirs[sexchr_dirs$count_dir == 'pos' &
+                              (#sexchr_dirs$ds_mode != 'YCD' | 
+                               sexchr_dirs$ds_mode == 'YCD + XCD linear'), ],
+            position = position_nudge(x = 30)) +
+  geom_text(aes(label = cond_count), data = sexchr_dirs[sexchr_dirs$count_dir == 'neg',], 
+            position = position_nudge(x = -10) ) +
+  geom_vline(xintercept = 0, linetype = 1, alpha = 0.7) +
+  scale_fill_manual(values = chr_tag_val) +
+  ylim('YCD + XCD linear', 'YCD', 'XCD quadratic', 'XCD linear') +
+  xlim(c(-70, 100)) +
+#  annotate(geom = 'text', label = 'negative', x = -50, y = 4.7) +
+# annotate(geom = 'text', label = 'positive', x = 50, y = 4.7) +
+# annotate(geom = 'text', label = '', x = 50, y = 5.8) +
+  theme_classic() +
+    theme(legend.position = 'inside', 
+          legend.position.inside = c(0.8, 0.4),
+          legend.title = element_text(size = rel(0.9)),
+          axis.text.y = element_text(size = rel(1.1), hjust = 0.05, margin = margin(r = -99)),
+          ) + 
+  labs(
+    x = 'Number of up and downregulated sex chromosomes',
+    y = 'SCD profile',
+    fill = 'Genomic region',
+   subtitle = '                                     Negative              Positive'
+  ) 
+
+```
+
+```{r}
+86/102
+
+```
+
+
+
+```{r line_expression}
+
+line_expression <- 
+sexchr_patterns_clean %>% 
+  dplyr::filter(!str_detect(ds_profile, 'opposite')) %>% # two linear opposite
+  dplyr::filter(!str_detect(ds_profile, 'YCD \\+ XCD quadratic')) %>% # three quadratic + y ( cant be really opposite)
+  dplyr::select(ENSG_id) %>%
+  left_join(
+    XYz_mx %>%
+    as.data.frame() %>%
+    rownames_to_column('ENSG_id'),
+    by = 'ENSG_id')  %>% 
+  pivot_longer(-c(ENSG_id), names_to = 'names', values_to = 'XY_scaled_expression') %>%
+  left_join(colData(uneroded_se) %>% as.data.frame(), by = 'names') %>%
+  left_join(sexchr_patterns_clean, by = 'ENSG_id') %>%
+ # mutate(XY_scaled_Yclean = if_else(chr_tag == 'Y_link' & gonSex == 'Female', NA, XY_scaled_expression)) %>% # the female simply wil not appear iin the plot, less confusing
+  group_by(ds_profile, karyotype, names) %>%
+  summarise(line_mean = mean(XY_scaled_expression, na.rm = TRUE),
+            line_sd = sd(XY_scaled_expression, na.rm = TRUE),
+            .groups = 'drop') %>%
+  mutate(
+    Xn = str_count(karyotype, 'X'), 
+    Yn = str_count(karyotype, 'Y'),
+    PARn = Xn + Yn,
+    ds_profile = factor(ds_profile)) %>%
+    split.data.frame(~ds_profile)
+
+```
+
+
+```{r p1}
+p1 <- 
+  line_expression$`XCD linear positive` %>%
+  mutate(kar_xcd = factor(karyotype, 
+                          levels = c('XO',  'XYY', 'XY', 'XX', 'XXY', 'XXYY', 'XXX', 'XXXXY', 'XXXX'))) %>%
+  ggplot(aes(kar_xcd, line_mean)) +
+    geom_point(alpha = 0.5, aes(color = karyotype)) +
+    geom_linerange(stat = 'summary') + #default mean-se
+    geom_point(stat = 'summary', shape = 'square', size = 1.5) +
+    geom_hline(yintercept = 0, lty = 3) +
+   # facet_wrap(~ collapsed_name.x, nrow = 1, scales = 'free_x') +
+    scale_color_discrete(palette = khroma::color('muted')) +
+    coord_cartesian(ylim = c(5,-5)) +
+    theme_classic() +
+      theme(axis.text.x = element_text(size = rel(0.8), angle = 90, vjust = 0.5),
+            panel.grid = element_line(colour = 'grey95', linewidth = 0.35),
+            panel.border = element_rect(color = 'grey5'),
+            plot.title = element_text(size = rel(0.833), hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+          #  strip.background = element_blank(), 
+            strip.text = element_text(size = 12), legend.position = 'none', legend.direction = 'horizontal'
+            ) +
+    labs(
+      x = '',
+      y = 'XY-scaled mean expression',
+      title = str_extract(line_expression$`XCD linear positive`$ds_profile, '^[^\\s]+'),
+      subtitle = str_extract(line_expression$`XCD linear positive`$ds_profile, '[^\\s]+$')
+      )
+```
+
+```{r p2}
+p2 <- 
+  line_expression$`XCD linear negative` %>%
+  mutate(kar_xcd = factor(karyotype, 
+                          levels = c('XO',   'XY', 'XYY', 'XX', 'XXY', 'XXYY', 'XXX','XXXX', 'XXXXY'))) %>%
+  ggplot(aes(kar_xcd, line_mean)) +
+    geom_point(alpha = 0.5, aes(color = karyotype)) +
+    geom_linerange(stat = 'summary') + #default mean-se
+    geom_point(stat = 'summary', shape = 'square', size = 1.5) +
+    geom_hline(yintercept = 0, lty = 3) +
+   # facet_wrap(~ collapsed_name.x, nrow = 1, scales = 'free_x') +
+    scale_color_discrete(palette = khroma::color('muted')) +
+    coord_cartesian(ylim = c(5,-5)) +
+    theme_classic() +
+      theme(axis.text.x = element_text(size = rel(0.8), angle = 90, vjust = 0.5),
+            panel.grid = element_line(colour = 'grey95', linewidth = 0.35),
+            panel.border = element_rect(color = 'grey5'),
+            plot.title = element_text(size = rel(0.833), hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+          #  strip.background = element_blank(), 
+            strip.text = element_text(size = 12), legend.position = 'none', legend.direction = 'horizontal'
+            ) +
+    labs(
+      x = '',
+      y = 'XY-scaled mean expression',
+      title = str_extract(line_expression$`XCD linear negative`$ds_profile, '^[^\\s]+'),
+      subtitle = str_extract(line_expression$`XCD linear negative`$ds_profile, '[^\\s]+$')
+      )
+```
+```{r}
+p3 <- 
+  line_expression$`XCD quadratic ` %>%
+  mutate(kar_xcd = factor(karyotype, 
+                          levels = c('XO',   'XY', 'XYY', 'XX', 'XXY', 'XXYY', 'XXX','XXXX', 'XXXXY'))) %>%
+  ggplot(aes(kar_xcd, line_mean)) +
+    geom_point(alpha = 0.5, aes(color = karyotype)) +
+    geom_linerange(stat = 'summary') + #default mean-se
+    geom_point(stat = 'summary', shape = 'square', size = 1.5) +
+    geom_hline(yintercept = 0, lty = 3) +
+   # facet_wrap(~ collapsed_name.x, nrow = 1, scales = 'free_x') +
+    scale_color_discrete(palette = khroma::color('muted')) +
+    coord_cartesian(ylim = c(5,-5)) +
+    theme_classic() +
+      theme(axis.text.x = element_text(size = rel(0.8), angle = 90, vjust = 0.5),
+            panel.grid = element_line(colour = 'grey95', linewidth = 0.35),
+            panel.border = element_rect(color = 'grey5'),
+            plot.title = element_text(size = rel(0.833), hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+          #  strip.background = element_blank(), 
+            strip.text = element_text(size = 12), legend.position = 'none', legend.direction = 'horizontal'
+            ) +
+    labs(
+      x = '',
+      y = 'XY-scaled mean expression',
+      title = str_extract(line_expression$`XCD quadratic `$ds_profile, '^[^\\s]+'),
+      subtitle = 'quadratic'
+      )
+```
+
+
+
+```{r}
+p4 <- 
+  line_expression$`YCD linear positive` %>%
+  mutate(kar_xcd = factor(karyotype, 
+                          levels = c('XO',  'XX', 'XXX', 'XXXX', 'XXXXY',  'XXY', 'XY',   'XYY', 'XXYY'))) %>%
+  ggplot(aes(kar_xcd, line_mean)) +
+    geom_point(alpha = 0.5, aes(color = karyotype)) +
+    geom_linerange(stat = 'summary') + #default mean-se
+    geom_point(stat = 'summary', shape = 'square', size = 1.5) +
+    geom_hline(yintercept = 0, lty = 3) +
+   # facet_wrap(~ collapsed_name.x, nrow = 1, scales = 'free_x') +
+    scale_color_discrete(palette = khroma::color('muted')) +
+    coord_cartesian(ylim = c(5,-5)) +
+    theme_classic() +
+      theme(axis.text.x = element_text(size = rel(0.8), angle = 90, vjust = 0.5),
+            panel.grid = element_line(colour = 'grey95', linewidth = 0.35),
+            panel.border = element_rect(color = 'grey5'),
+            plot.title = element_text(size = rel(0.833), hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+          #  strip.background = element_blank(), 
+            strip.text = element_text(size = 12), legend.position = 'none', legend.direction = 'horizontal'
+            ) +
+    labs(
+      x = '',
+      y = 'XY-scaled mean expression',
+      title = str_extract(line_expression$`YCD linear positive`$ds_profile, '^[^\\s]+'),
+      subtitle = str_extract(line_expression$`YCD linear positive`$ds_profile, '[^\\s]+$')
+      )
+```
+```{r}
+p5 <- 
+  line_expression$`YCD linear negative` %>%
+  mutate(kar_xcd = factor(karyotype, 
+                          levels = c('XO',  'XX', 'XXXX','XXX',  'XY',   'XXY', 'XXXXY',   'XXYY', 'XYY'))) %>%
+  ggplot(aes(kar_xcd, line_mean)) +
+    geom_point(alpha = 0.5, aes(color = karyotype)) +
+    geom_linerange(stat = 'summary') + #default mean-se
+    geom_point(stat = 'summary', shape = 'square', size = 1.5) +
+    geom_hline(yintercept = 0, lty = 3) +
+   # facet_wrap(~ collapsed_name.x, nrow = 1, scales = 'free_x') +
+    scale_color_discrete(palette = khroma::color('muted')) +
+    coord_cartesian(ylim = c(5,-5)) +
+    theme_classic() +
+      theme(axis.text.x = element_text(size = rel(0.8), angle = 90, vjust = 0.5),
+            panel.grid = element_line(colour = 'grey95', linewidth = 0.35),
+            panel.border = element_rect(color = 'grey5'),
+            plot.title = element_text(size = rel(0.833), hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+          #  strip.background = element_blank(), 
+            strip.text = element_text(size = 12), legend.position = 'none', legend.direction = 'horizontal'
+            ) +
+    labs(
+      x = '',
+      y = 'XY-scaled mean expression',
+      title = str_extract(line_expression$`YCD linear negative`$ds_profile, '^[^\\s]+'),
+      subtitle = str_extract(line_expression$`YCD linear negative`$ds_profile, '[^\\s]+$')
+      )
+```
+
+```{r}
+p6 <- 
+  line_expression$`YCD + XCD linear positive` %>%
+  mutate(kar_xcd = factor(karyotype, 
+                          levels = c('XO',  'XX',  'XY', 'XXX',  'XXY', 'XYY','XXXX',  'XXYY', 'XXXXY' ))) %>%
+  ggplot(aes(kar_xcd, line_mean)) +
+    geom_point(alpha = 0.5, aes(color = karyotype)) +
+    geom_linerange(stat = 'summary') + #default mean-se
+    geom_point(stat = 'summary', shape = 'square', size = 1.5) +
+    geom_hline(yintercept = 0, lty = 3) +
+   # facet_wrap(~ collapsed_name.x, nrow = 1, scales = 'free_x') +
+    scale_color_discrete(palette = khroma::color('muted')) +
+    coord_cartesian(ylim = c(5,-5)) +
+    theme_classic() +
+      theme(axis.text.x = element_text(size = rel(0.8), angle = 90, vjust = 0.5),
+            panel.grid = element_line(colour = 'grey95', linewidth = 0.35),
+            panel.border = element_rect(color = 'grey5'),
+            plot.title = element_text(size = rel(0.833), hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+          #  strip.background = element_blank(), 
+            strip.text = element_text(size = 12), legend.position = 'none', legend.direction = 'horizontal'
+            ) +
+    labs(
+      x = '',
+      y = 'XY-scaled mean expression',
+      title = 'YCD & XCD',
+      subtitle = str_extract(line_expression$`YCD + XCD linear positive`$ds_profile, '[^\\s]+$')
+      )
+```
+
+```{r p7}
+p7 <- 
+  line_expression$`YCD + XCD linear negative` %>%
+  mutate(kar_xcd = factor(karyotype, 
+                          levels = c('XO',  'XX',  'XY', 'XXX',  'XYY', 'XXY','XXXX',  'XXYY', 'XXXXY' ))) %>%
+  ggplot(aes(kar_xcd, line_mean)) +
+    geom_point(alpha = 0.5, aes(color = karyotype)) +
+    geom_linerange(stat = 'summary') + #default mean-se
+    geom_point(stat = 'summary', shape = 'square', size = 1.5) +
+    geom_hline(yintercept = 0, lty = 3) +
+   # facet_wrap(~ collapsed_name.x, nrow = 1, scales = 'free_x') +
+    scale_color_discrete(palette = khroma::color('muted')) +
+    coord_cartesian(ylim = c(5,-5)) +
+    theme_classic() +
+      theme(axis.text.x = element_text(size = rel(0.8), angle = 90, vjust = 0.5),
+            panel.grid = element_line(colour = 'grey95', linewidth = 0.35),
+            panel.border = element_rect(color = 'grey5'),
+            plot.title = element_text(size = rel(0.833), hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+          #  strip.background = element_blank(), 
+            strip.text = element_text(size = 12), legend.position = 'none', legend.direction = 'horizontal'
+            ) +
+    labs(
+      x = '',
+      y = 'XY-scaled mean expression',
+      title = 'YCD & XCD',
+      subtitle = str_extract(line_expression$`YCD + XCD linear negative`$ds_profile, '[^\\s]+$')
+      )
+```
+
+```{r avg_plots, message=FALSE}
+#| fig-height: 3.6 
+#| fig-width: 7.2
+
+
+avg_plots <- 
+  p1 + labs(tag = 'b', color = 'Karyotype') + theme(plot.tag = element_text(face = 'bold')) +
+  p2 + labs(color = 'Karyotype') + 
+  p3 + labs(color = 'Karyotype') +
+  p4 + labs(color = 'Karyotype') + 
+  p5 + labs(color = 'Karyotype') +
+  p6 + labs(color = 'Karyotype') + 
+  p7 +labs(color = 'Karyotype') +
+  #plot_annotation(title = 'XCD                                    YCD                         SCD', 
+            #      theme =  theme(plot.title= element_text(hjust = 0.5, face = 'bold'))) +
+  plot_layout(nrow = 1, axis_titles = 'collect_y',  axes = 'collect_y', guides = 'collect') &
+  theme(legend.position = "bottom", legend.margin = margin(t = -28, l = -30, r = 5)) &
+  guides(color = guide_legend(nrow=1, byrow=TRUE))
+  
+
+```
+
+
+
+```{r}
+pdf('Panel2_clean.pdf', height = 6, width = 7)
+
+sexchr_dirs_plot + labs(tag = 'a') + theme(plot.tag = element_text(face = 'bold')) +
+avg_plots  + 
+  plot_layout(ncol = 1) 
+ 
+dev.off()
+```
+
+
+
+
+
+
+######## For panel 3 ####
+
+```{r quadratics, warning=FALSE, message=FALSE}
+#female_quad <- c('ENSG00000005889','ENSG00000056998','ENSG00000101843','ENSG00000101844','ENSG00000101846','ENSG00000123728','ENSG00000130741','ENSG00000146938','ENSG00000147257','ENSG00000157600','ENSG00000167393','ENSG00000182287','ENSG00000213468','ENSG00000229807') #Pend to tes int this new model
+
+quad_path <-
+  XYz_mx |>
+  as.data.frame() |>
+  rownames_to_column('ENSG_id') |>
+  dplyr::filter(ENSG_id %in% sexchr_patterns_clean[sexchr_patterns_clean$ds_profile == 'XCD quadratic ',]$ENSG_id) %>%
+  pivot_longer(-ENSG_id, names_to = 'names', values_to = 'XY_scaled_Zs') %>%
+  left_join(colData(uneroded_se) %>% as.data.frame(), by = 'names') %>%
+  group_by(ENSG_id, Xn) %>%
+  summarise(XY_scaled_mean = mean(XY_scaled_Zs), .groups = 'drop') %>% 
+  left_join(gen50_ensg, by = 'ENSG_id') %>%
+  left_join(rowData(uneroded_se) |> as.data.frame(), by = 'ENSG_id') %>%
+  group_by(ENSG_id) %>%
+  mutate(
+    peak = which.max(XY_scaled_mean),
+    cond_label = case_when(
+      peak == Xn & XY_scaled_mean > 4 & 
+      !str_starts(gene_name, 'ENSG') & 
+      !str_starts(gene_name, 'AP') ~ gene_name,
+      peak == Xn & is_gametolog == 'X_gametolog' ~ gene_name, TRUE ~ NA),
+    gam_face = ifelse(is_gametolog == 'no_g', 'plain', 'bold'),
+    model = case_when(
+      peak == 3 ~ 'Inverted U',
+      peak == 4 ~ 'Asymptotic',
+      .default = 'other') ,
+  #  gam_stroke = if_else(is_gametolog == 'no_g', 0, 1)
+   # female_q = case_when(ENSG_id %in% female_quad ~ 'yes', 
+    #                     TRUE ~ 'no')
+  )
+
+quad_path[quad_path$Xn == 1,]$model %>% table()
+quad_path$peak %>% table()
+
+quad_path |> dplyr::filter(peak == 4)
+```
+
+
+
+
+
+```{r quadratics plot, message=FALSE, warning=FALSE}
+#| fig-height: 7
+#| fig-width: 7
+
+#quad_path_plot <-
+quad_path %>%
+  ggplot(aes(Xn, XY_scaled_mean, linewidth = is_gametolog, lty = is_gametolog)) + #, alpha = is_gametolog,
+#  geom_path(aes(group = ENSG_id, color = chr_tag), alpha = 0.5) +
+  geom_point(data = quad_path[quad_path$peak == quad_path$Xn,], fill = '#332288', alpha = 0.85, shape = 1,  color = '#332288', stroke = 0.85) +
+#  geom_point(data = quad_path[quad_path$peak == quad_path$Xn & quad_path$model == 'Inverted U',], fill = '#332288', alpha = 0.50, shape = 21, size = 2.5) +
+  geom_smooth(aes(group = ENSG_id, color = chr_tag), method = 'loess', span = 1.5,  se = FALSE) +
+  geom_text_repel(aes(label = cond_label, fontface = gam_face), size = rel(3), max.overlaps = 20, segment.alpha = 0, show.legend = FALSE) +
+                #data = quad_path[quad_path$is_gametolog == 'no_g',], position = position_nudge_repel(y = -0.25, x = 0)) +
+ # geom_text(aes(label = cond_label), size = rel(3), max.overlaps = 20, segment.alpha = 0, show.legend = FALSE, data = quad_path[quad_path$is_gametolog == 'X_gametolog',], fontface = 'bold', position = position_nudge_repel(y = 1.5, x = -.75)) +
+  scale_color_manual(values = chr_tag_val) +
+  scale_linewidth_manual(values = c(no_g = 0.25, X_gametolog = 0.75, Y_gametolog = 0.75)) +
+  scale_linetype_manual(values = c(no_g = '91', X_gametolog = 'solid', Y_gametolog = 'solid')) +
+ # scale_alpha_manual(values = c(no_g = 0.5, X_gametolog = 0.75, Y_gametolog = 0.5)) +
+  facet_wrap(~ model, scales = 'free_y' ) + #+ female_q
+  theme_bw() +
+  theme(strip.background = element_blank(), panel.grid = element_line(colour = 'grey97'),
+        strip.text = element_text(size = rel(1.05)) 
+        )+
+  labs(
+    x = 'Number of X chromosomes',
+    y = 'XY-scaled mean expression', #expression(atop(Mean~expression, XY-scaled)),
+    lty = 'Gametolog',
+    alpha = 'Gametolog',
+    linewidth = 'Gametolog',
+    color = 'Genomic region'
+  )
+```
+
+```{r}
+171/561
+```
+
+
+
+```{r lq}
+Xf_1to3 <-
+hg38Xf_mm %>% # uninformative name, this is only 1 to 3
+  rename_with(~ paste0(., '_1to3')) %>%
+  rownames_to_column('item') %>%
+  right_join(sexchr_patterns_clean, 'item')
+  
+
+#cor.test(raw_1to3$linear_beta, raw_1to3$beta_1to3, method = 'spearman') #rho 0.8538503 #p-value < 2.2e-16
+
+#lm(linear_beta ~ beta_1to3, data = raw_1to3) %>% summary() #Adjusted R-squared:  0.9007  p-value: < 2.2e-16   
+
+#test_all <- 
+ # full_join(
+  #  hg38Xf_mm %>% # uninformative name, this is only 1 to 3
+    #  rename_with(~ paste0(., '_1to3')) %>%
+   #   rownames_to_column('gene_id'),
+    #hg38_sig$hg38XCDL_mm,
+    #by = 'gene_id'
+  #)
+
+#cor.test(test_all$logFC_1to3, test_all$logFC) # 0.9753617 , p-value < 2.2e-16
+
+lq <- 
+Xf_1to3 %>% #dplyr::filter(gene_symbol != 'XIST') %>%
+  dplyr::filter(ds == 'XCD') %>%
+  left_join(
+    rowRanges(gen49_uneroded) %>% as.data.frame() %>% 
+      dplyr::select(ENSG_id, gene_alias, XCI_merged, Balaton, Tukiainen, Gylemo, Sauteraud),
+    by = 'ENSG_id'
+    ) |>
+  left_join(gen50_ensg |> dplyr::select(ENSG_id, gene_name, gene_type, hgnc_id),
+       #  by = 'ENSG_id'
+         ) |>
+  left_join(quad_path |> dplyr::select(ENSG_id, model)|> unique() ,
+            by = 'ENSG_id') |>
+  mutate(
+    type = if_else(!is.na(model), model, ds_profile),
+    abs_1to3 = abs(logFC_1to3),
+    pi_1to3 = abs(logFC_1to3) * -log(P.Value_1to3),
+    dir = if_else(profile == 'quadratic', 'positive', dir),
+    shortbio = case_when(
+                 gene_type == 'protein_coding' ~  'protein-coding',
+                 gene_type == 'lncRNA' ~  'lncRNA',
+                 str_detect(gene_type, 'pseudo') ~ 'pseudogene',
+                 .default = 'other')
+    )|>
+    dplyr::filter(shortbio != 'other') 
+```
+
+```{r}
+  read_rds('gen49_cleanse.rds') |> colData()
+```
+
+
+
+
+```{r volcxist}
+xlq_volc_xist <-
+  lq %>%
+  mutate(
+    pi_score = abs_1to3 * -log10(adj.P.Val_1to3),
+    cond_label = ifelse(rank(dplyr::desc(pi_score)) < 10 & str_starts(gene_name, 'ENSG', negate = TRUE), gene_name, ''),
+    quad_stroke = ifelse(profile == 'quadratic' , 0.85, 0.85)
+    ) %>%
+  
+  ggplot(aes(logFC_1to3, -log10(adj.P.Val_1to3), label = gene_name)) + 
+  #  geom_point(data = sexchr_1to3, color = 'grey', alpha = 0.25, shape = 20 ) +
+   geom_point(aes(fill = short_tag, color = short_tag, stroke = quad_stroke, shape = profile),  alpha = 0.85) +
+  #  geom_point(aes(fill = short_tag, color = short_tag, stroke = quad_stroke), shape = 13, alpha = 0.85 ) +
+    geom_text_repel(data = lq[lq$gene_name == 'XIST',],
+                   # aes(alpha = is_gametolog), 
+                    size = rel(4), 
+                    position = position_nudge_repel(), 
+                    color = 'black', 
+                    segment.alpha = 0.25, 
+                    max.overlaps = 15, show.legend = FALSE) +
+  #geom_vline(xintercept = 0, lty = 3) +
+  geom_rect(aes(xmin = -3, xmax = 0, ymin = -1, ymax = 3), alpha = 0, colour = '#848484', linejoin = 'bevel', linetype = '22', linewidth = 0.2) +
+  geom_rect(aes(xmin = 0, xmax = 4, ymin = -1, ymax = 22), alpha = 0, colour = '#848484', linejoin = 'bevel', linetype = '22', linewidth = 0.2) +
+  annotate(geom = 'text', x = 1, y = 21, label = 'c', color = 'red4') +
+  annotate(geom = 'text', x = -2, y = 2, label = 'd', color = 'red4') +
+   scale_color_manual(
+    values = c(chr_tag_val, `notDE` = 'grey70'),       
+    breaks = c('X_link', 'PAR', 'not XDS')) + 
+  scale_fill_manual(
+    values = c(chr_tag_val, `notDE` = 'grey70'),       
+    breaks = c('X_link', 'PAR', 'not XDS')) + 
+  scale_shape_manual(values = c(quadratic = 1, linear = 21)) +
+#  scale_shape_manual(values = c(linear = 19, quadratic = 23, `not XDS` = 20), 
+ #                    breaks = c('quadratic', 'linear', 'not XDS'),
+                    # labels = function(x) {x[is.na(x)] <- 'no XDS'; x},
+  #                   na.value = 20) +
+  scale_alpha_manual(values = c(no_g = 0.6, X_gametolog = 0.85)) +
+ # coord_cartesian(xlim = c(-2,13), ylim = c(0, 120), expand = FALSE, clip = 'off') + 
+  theme_classic() +
+  labs(
+    x = expression(log2FC[XCD3]),
+    y = expression(-log10(padj[XCD3])), 
+    shape = 'XDS profile',
+    alpha = 'Gametolog',
+    color = 'Genomic region',
+    fill = 'Genomic region'
+  )
+
+```
+
+```{r}
+xlq_down_plot <-
+  lq %>%
+  mutate(
+    pi_score = abs_1to3 * -log10(adj.P.Val_1to3),
+    cond_label = case_when(
+      rank(dplyr::desc(pi_score)) < 8 & !str_starts(gene_name, 'ENSG') ~ gene_name,
+      logFC_1to3 > -2 & !str_starts(gene_symbol, 'ENSG') ~ gene_name,
+    #  gene_symbol == 'ENSG00000271147' ~ 'LINC0030',
+    #  gene_symbol == 'ENSG00000234129' ~ 'Lnc-MID1-1',
+    #  str_detect(gene_symbol, 'ENSG') ~ '',
+      TRUE ~ '')) %>%
+  dplyr::filter(gene_name != 'XIST') %>%
+  ggplot(aes(logFC_1to3, -log10(adj.P.Val_1to3), label = cond_label)) + 
+  #  geom_point(data = sexchr_1to3, color = 'grey', alpha = 0.25, shape = 20 ) +
+  #  geom_point(aes(fill = short_tag, color = short_tag), shape = 1, alpha = 0.85, stroke = 0.85) +
+   geom_point(aes(fill = short_tag, color = short_tag, stroke = 0.85, shape = profile),  alpha = 0.85) +
+    geom_text_repel(aes(alpha = is_gametolog), 
+                    size = rel(3), 
+                    position = position_nudge_repel(), 
+                    color = 'black', 
+                    segment.alpha = 0.25, 
+                    max.overlaps = 15, show.legend = FALSE) +
+ # geom_rect(aes(xmin = -1.5, xmax = 0, ymin = 0, ymax = 2.5), alpha = 0, colour = 'red4', linejoin = 'bevel', linetype = '11', linewidth = 0.2) +
+   scale_color_manual(
+    values =  c(chr_tag_val, `notDE` = 'grey70'),       
+    breaks = c('X_link', 'PAR', 'not XDS')) + 
+  scale_fill_manual(
+    values =  c(chr_tag_val, `notDE` = 'grey70'),       
+    breaks = c('X_link', 'PAR', 'not XDS')) + 
+  scale_shape_manual(values = c(linear = 21, quadratic = 1, `not XDS` = 20), 
+                     breaks = c('quadratic', 'linear', 'not XDS'),
+                    # labels = function(x) {x[is.na(x)] <- 'no XDS'; x},
+                     na.value = 20) +
+  scale_alpha_manual(values = c(no_g = 0.6, X_gametolog = 0.85)) +
+  scale_x_continuous(breaks = c(-0.5, 0), limits = c(-.75, 0)) +
+  scale_y_continuous(breaks = c(0, 0.5), limits = c(0, .75)) +
+  #coord_cartesian(xlim = c(0,5), ylim = c(0, 100), expand = FALSE, clip = 'off') + 
+  theme_classic() +
+  labs(
+    x = expression(log2FC[XCD3]),
+    y = expression(-log10(padj[XCD3])), 
+    shape = 'XDS profile',
+    alpha = 'Gametolog',
+    color = 'Genomic region',
+    fill = 'Genomic region'
+  )
+```
+
+
+
+
+
+```{r volcup}
+xlq_up_plot <-
+  lq %>%
+  mutate(
+    pi_score = abs_1to3 * -log10(adj.P.Val_1to3),
+    cond_label = case_when(
+      rank(dplyr::desc(pi_score)) < 8 & !str_starts(gene_name, 'ENSG') ~ gene_name,
+      logFC_1to3 > 2.7 & !str_starts(gene_symbol, 'ENSG') ~ gene_name,
+      str_detect(gene_name, 'ENSG') ~ '',
+      TRUE ~ ''),
+    quad_stroke = ifelse(profile == 'quadratic' , 1, 0)) %>%
+  dplyr::filter(gene_name != 'XIST') %>%
+  ggplot(aes(logFC_1to3, -log10(adj.P.Val_1to3), label = cond_label)) + 
+  #  geom_point(data = sexchr_1to3, color = 'grey', alpha = 0.25, shape = 20 ) +
+  #  geom_point(aes(fill = short_tag, color = short_tag, stroke = quad_stroke), shape = 21,  alpha = 0.5) +
+   geom_point(aes(fill = short_tag, color = short_tag, stroke = 0.85, shape = profile),  alpha = 0.85) +
+    geom_text_repel(aes(alpha = is_gametolog), 
+                    size = rel(3), 
+                    position = position_nudge_repel(), 
+                    color = 'black', 
+                    segment.alpha = 0.25, 
+                    max.overlaps = 15, show.legend = FALSE) +
+ # geom_rect(aes(xmin = -1.5, xmax = 0, ymin = 0, ymax = 2.5), alpha = 0, colour = 'red4', linejoin = 'bevel', linetype = '11', linewidth = 0.2) +
+   scale_color_manual(
+    values =  c(chr_tag_val, `notDE` = 'grey70'),       
+    breaks = c('X_link', 'PAR', 'not XDS')) + 
+  scale_fill_manual(
+    values =  c(chr_tag_val, `notDE` = 'grey70'),       
+    breaks = c('X_link', 'PAR', 'not XDS')) + 
+    scale_shape_manual(values = c(linear = 21, quadratic = 1, `not XDS` = 20), 
+                     breaks = c('quadratic', 'linear', 'not XDS'),
+                    # labels = function(x) {x[is.na(x)] <- 'no XDS'; x},
+                     na.value = 20) +
+  #scale_shape_manual(values = xcd_shape_val) +
+  #scale_shape_manual(values = c(linear = 19, quadratic = 23, `not XDS` = 20), 
+   #                  breaks = c('quadratic', 'linear', 'not XDS'),
+                    # labels = function(x) {x[is.na(x)] <- 'no XDS'; x},
+    #                 na.value = 20) +
+  scale_alpha_manual(values = c(no_g = 0.6, X_gametolog = 0.85)) +
+  #coord_cartesian(xlim = c(0,5), ylim = c(0, 100), expand = FALSE, clip = 'off') + 
+  xlim(0,3) + 
+  ylim(0, 20) +
+  theme_classic() +
+  labs(
+    x = expression(log2FC[XCD3]),
+    y = expression(-log10(padj[XCD3])), 
+    shape = 'XDS profile',
+    alpha = 'Gametolog',
+    color = 'Genomic region',
+    fill = 'Genomic region'
+  )
+
+```
+ 
+```{r}
+#prepare vst for regression
+uneroded_vst <- 
+  DESeqDataSet(uneroded_se, ~1) |>
+  vst() |> 
+  assay()
+```
+
+##### recalculate r24 adjusted, trying to replicate
+
+```{r xcdvar}
+# add the new annotations
+xcd_var <- 
+  lq %>% 
+  ungroup() %>%
+  left_join(tibble('item' = rownames(Xf_vobj$E), 
+                   'XO_CPM' = Xf_vobj$E[,uneroded_se$karyotype == 'XO'] %>% exp() %>% rowMeans()),
+            by = 'item') %>%
+  left_join(tibble('item' = rownames(Xf_vobj$E), 
+                   'XY_CPM' = Xf_vobj$E[,uneroded_se$karyotype == 'XY'] %>% exp() %>% rowMeans()),
+            by = 'item') %>%
+  left_join(tibble('item' = rownames(Xf_vobj$E), 
+                   'XYY_CPM' = Xf_vobj$E[,uneroded_se$karyotype == 'XYY'] %>% exp() %>% rowMeans()),
+            by = 'item') %>%
+  left_join(tibble('item' = rownames(uneroded_vst), 
+                  'XO_vst' = uneroded_vst[,uneroded_se$karyotype == 'XO']  %>% rowMeans()),
+            by = 'item') %>%
+  left_join(tibble('item' = rownames(uneroded_vst), 
+                  'XY_vst' = uneroded_vst[,uneroded_se$karyotype == 'XY']  %>% rowMeans()),
+            by = 'item') %>%
+  left_join(tibble('item' = rownames(uneroded_vst), 
+                  'XYY_vst' = uneroded_vst[,uneroded_se$karyotype == 'XYY'] %>% rowMeans()),
+            by = 'item') %>%
+  rowwise() %>%
+ mutate(
+    vst_mean = mean(c(XO_vst, XY_vst, XYY_vst)),
+    vst_XO_XY = mean(c(XO_vst, XY_vst)),
+    vst_XO_XYY = mean(c(XO_vst, XYY_vst)),
+    vst_XY_XYY = mean(c(XY_vst, XYY_vst)),
+    mono_mean = mean(c(XO_CPM, XY_CPM, XYY_CPM)),
+    male_mean = mean(c(XY_CPM, XYY_CPM))) %>%
+  ungroup() %>%
+  mutate(
+    mono_mean_centered = scale(mono_mean, scale = FALSE, center = TRUE),
+    XO_base_centered = scale(XO_CPM, scale = FALSE, center = TRUE),
+    XY_base_centered = scale(XY_CPM, scale = FALSE, center = TRUE),
+    XYY_base_centered = scale(XYY_CPM, scale = FALSE, center = TRUE),
+   # biotype_short = case_when( #### already better coded in 'shortbio'
+    #  gene_type == 'protein_coding' ~  'protein_coding',
+     # gene_type == 'lncRNA' ~  'lncRNA',
+      #.default = 'other non-coding'
+    stroke_prof = if_else(profile == 'quadratic', 0.8, 0)
+  ) %>%
+    replace_na(list(XCI_merged = 'undefined')) 
+
+
+xcde <- xcd_var %>%
+  dplyr::filter(gene_symbol != 'XIST') 
+
+```
+
+
+# signed emms reannotated
+```{r pxcde xci join sign}
+XCI_mod <- lm_robust(logFC_1to3  ~ XCI_merged, data = xcde, se_type = "HC3") 
+XCI_emm <- XCI_mod %>% emmeans(~ XCI_merged, vcov = vcov(XCI_mod))
+XCI_pairs <- XCI_emm %>% pairs(adjust = 'holm')
+
+XCI_mod %>% glance()
+XCI_mod %>% summary()
+XCI_pairs %>% tidy() %>% arrange(desc(estimate))
+
+```
+
+
+
+```{r pxcde gam sign}
+segam_mod <- lm_robust(logFC_1to3  ~ is_gametolog, data = xcde, se_type = "HC3") 
+segam_emm <- segam_mod %>% emmeans(~ is_gametolog, vcov = vcov(segam_mod))
+segam_pairs <- segam_emm %>% pairs(adjust = 'holm')
+
+segam_mod %>% glance()
+segam_pairs %>% tidy() %>% arrange(desc(estimate))
+
+```
+
+```{r xcde biotype, eval=FALSE}
+sebiotype_mod <- lm_robust(logFC_1to3 ~ gene_type, data = xcde, se_type = "HC3") 
+sebiotype_emm <- sebiotype_mod %>% emmeans( ~ gene_type) 
+sebiotype_pairs <- sebiotype_emm %>% pairs(adjust = 'holm')
+
+sebiotype_mod %>% glance()
+sebiotype_pairs %>% tidy() %>% arrange(desc(estimate))
+```
+```{r}
+xcde$shortbio |> table()
+```
+
+
+```{r xcde biotype short, eval=FALSE}
+shortbiotype_mod <- lm_robust(logFC_1to3 ~ shortbio, data = xcde, se_type = "HC3") 
+shortbiotype_emm <- shortbiotype_mod %>% emmeans( ~ shortbio) 
+shortbiotype_pairs <- shortbiotype_emm %>% pairs(adjust = 'holm')
+
+shortbiotype_mod %>% glance()
+shortbiotype_pairs %>% tidy() %>% arrange(desc(estimate))
+```
+
+
+```{r xcde biotype short with shortbio, eval=FALSE}
+shortbio_mod <- lm_robust(logFC_1to3 ~ shortbio, data = xcde, se_type = "HC3") 
+shortbio_emm <- shortbio_mod %>% emmeans( ~ shortbio) 
+shortbio_pairs <- shortbio_emm %>% pairs(adjust = 'holm')
+
+shortbio_mod %>% glance()
+shortbio_pairs %>% tidy() %>% arrange(desc(estimate))
+```
+
+```{r binary biotype}
+bxcde <- xcde |>
+ # dplyr::filter(biotype != 'unannotated') %>%
+  mutate(binbio = case_when(biotype == 'protein-coding' ~ 'Coding', 
+                            biotype == 'unannotated' ~ 'Unannotated',
+                            TRUE ~ 'Non-coding'))
+
+bsebiotype_mod <- lm_robust(logFC_1to3 ~ binbio, data = bxcde, se_type = "HC3") 
+bsebiotype_emm <- bsebiotype_mod %>% emmeans( ~ binbio) 
+bsebiotype_pairs <- bsebiotype_emm %>% pairs(adjust = 'holm')
+
+bsebiotype_mod %>% glance()
+bsebiotype_pairs %>% tidy() %>% arrange(desc(estimate))
+```
+
+
+
+```{r updated signed}
+ups_pairs <-
+  list(
+       bsebiotype_pairs,
+       XCI_pairs,
+       segam_pairs) %>% 
+  lapply(tidy) %>%
+  bind_rows() %>%
+  dplyr::filter(p.value < 0.05 | adj.p.value < 0.05) %>%
+  separate_longer_delim(contrast, delim = ' - ') %>%
+  pull(contrast) %>% str_remove_all('\\(|\\)')
+
+ups_emm <- 
+  bind_rows(
+  
+    'XCI status' = XCI_emm %>% tidy(conf.int = TRUE) %>% mutate(variable = XCI_merged) %>% .[-1],
+    'Biotype' = bsebiotype_emm %>% tidy(conf.int = TRUE) %>% mutate(variable = binbio) %>% .[-1],
+    'Y-gametolog' = segam_emm %>% tidy(conf.int = TRUE) %>% mutate(variable = is_gametolog) %>% .[-1],
+    .id = 'Predictor') %>%
+   left_join(bind_rows(
+    'XCI status' = XCI_mod %>% glance(),
+   # 'Biotype' = shortbiotype_mod %>% glance(),
+   'Biotype' = bsebiotype_mod %>% glance(),
+    'Y-gametolog' = segam_mod %>% glance(),
+    .id = 'Predictor'),
+    by = 'Predictor') %>%
+   mutate(
+     sig = if_else(variable %in% ups_pairs, 'yes','no'),
+     variable = fct_reorder(variable, estimate),
+     label_stat = case_when(
+       p.value.y < 0.0001 ~ paste0(Predictor, ' (F = ', round(statistic.y, 2), ', p < .0001)' ),
+       p.value.y > 0.0001 ~ paste0(Predictor, ' (F = ', round(statistic.y, 2), ', p = ', format.pval(p.value.y, digits = 2, scientific = FALSE ), ')' )) ,
+     label_stat = fct_reorder(label_stat, p.value.y)
+    #   'XCI status (F = 12.76, p < .0001)', 'Biotype (F = 1.41, p = 0.24)', 'Y-gametolog (F = 0.41, p = 0.52)' ))
+   ) %>%
+  dplyr::filter(variable != 'pseudo/ncRNA' & variable != 'PAR')
+```
+
+
+
+
+
+```{r updated signed plot}
+#ups_plot <- 
+  ups_emm %>%
+
+   ggplot(aes(variable, estimate, ymin = conf.low, ymax = conf.high, alpha = sig)) + 
+   geom_hline(yintercept = 0, linetype = "dashed", color = 'lightblue2') +
+   geom_pointrange(show.legend = FALSE, color = chr_tag_val['X_link']) +
+   scale_x_discrete(
+     labels = c( 'Coding' = 'Coding' ,
+                 'Non-coding' = 'Non-coding',
+                 'undefined' = 'No consensus',
+                 'inactive' = 'Inactive',
+                 'variable' = 'Variable',
+                 'escape' = 'Escape',
+                 'no XCI call' = 'No call',
+                  'X_gametolog' = 'Yes',
+                  'no_g' = 'No')
+                    )  +
+  scale_y_continuous(name = expression(log2FC[XCD3]~(EMMs))) +
+ #  scale_colour_viridis_d(option = 'plasma')+
+ # scale_color_manual(values = c("#1E3A8A", "#4338CA", "blue")) +
+   scale_alpha_manual(values = c(yes = 1, no = 0.5)) +
+  
+   facet_wrap(~ label_stat, ncol = 1, scales = 'free_y') +
+
+   coord_flip() + #ylim = c(-0.55,1.5)) +
+   theme_classic() +
+   theme(strip.background = element_blank(), 
+         axis.text.y = element_text(angle = 45, size = rel(1.1)),
+         axis.title.y = element_blank()
+      #   axis.text.y = element_text(hjust = 0.5, margin = margin(r = -50) ) 
+         ) #+
+ #  labs(y = expression(log2FC[XCD3]~(EMMs)))
+
+```
+
+```{r}
+ups_plot_list <- 
+  ups_emm %>%
+   split.data.frame(~label_stat) |>
+   lapply(function(x) { x %>%
+   ggplot(aes(variable, estimate, ymin = conf.low, ymax = conf.high, alpha = sig)) + 
+   geom_hline(yintercept = 0, linetype = "dashed", color = 'lightblue2') +
+   geom_pointrange(show.legend = FALSE, color = chr_tag_val['X_link']) +
+   scale_x_discrete(
+     labels = c( 'Coding' = 'Coding' ,
+                 'Non-coding' = 'Non-coding',
+                 'undefined' = 'No consensus',
+                 'inactive' = 'Inactive',
+                 'variable' = 'Variable',
+                 'escape' = 'Escape',
+                 'no XCI call' = 'No call',
+                  'X_gametolog' = 'Yes',
+                  'no_g' = 'No')
+                    )  +
+  scale_y_continuous(name = expression(log2FC[XCD3]~(EMMs))) +
+ #  scale_colour_viridis_d(option = 'plasma')+
+ # scale_color_manual(values = c("#1E3A8A", "#4338CA", "blue")) +
+   scale_alpha_manual(values = c(yes = 1, no = 0.5)) +
+  
+ #  facet_wrap(~ label_stat, ncol = 1, scales = 'free_y') +
+
+   coord_flip() + #ylim = c(-0.55,1.5)) +
+   theme_classic() +
+   theme(strip.background = element_blank(), 
+    #     axis.text.y = element_text(angle = 45, size = rel(1.1)),
+         axis.title.y = element_blank()
+      #   axis.text.y = element_text(hjust = 0.5, margin = margin(r = -50) ) 
+         ) #+
+ #  labs(y = expression(log2FC[XCD3]~(EMMs)))
+})
+```
+
+```{r}
+upsV2_plot <- 
+ups_plot_list$`XCI status (F = 14.77, p < .0001` + labs(subtitle = 'XCI status (F = 14.77, p < .0001)') +
+  ups_plot_list$`Biotype (F = 4.85, p = 0.03` + labs(subtitle = 'Biotype (F = 4.85, p = 0.03)') +
+  ups_plot_list$`Y-gametolog (F = 0.83, p = 0.37` + labs(subtitle = 'Y-gametolog (F = 0.83, p = 0.37)') +
+  plot_layout(ncol = 1, heights = c(4,2,2), axis_titles = 'collect', axes = 'collect') 
+```
+
+
+```{r xcde xo vst}
+XOvst_mod <- lm(logFC_1to3 ~ XO_vst, data = xcde, se_type = "HC3") 
+XOvst_emm <- XOvst_mod %>% emmeans(~ XO_vst) 
+
+XOvst_mod  %>% summary() # less interpretable,this are coefficients
+
+#eXO_spline1 <-  lm(abs_1to3 ~ splines2::nsk(XO_base_centered,df = 1), data = xcde)
+XOvst_spline2 <-  lm(logFC_1to3 ~ splines2::nsk(XO_vst,df = 2), data = xcde)
+XOvst_spline3 <-  lm(logFC_1to3 ~ splines2::nsk(XO_vst,df = 3), data = xcde)
+
+#MuMIn::AICc( seXO_spline2, seXY_spline3)
+
+anova(XOvst_mod, XOvst_spline2)
+
+XOvst_spline2 %>% glance() %>% pull(adj.r.squared) %>% round(2)
+XOvst_spline2 %>% glance() %>% pull(p.value) %>% round(4) # < .0001
+
+R_XOvst <- XOvst_spline2 %>% glance() %>% pull(adj.r.squared) %>% round(2)
+p_XOvst <- XOvst_spline2 %>% glance() %>% pull(p.value) %>% round(4) # < .0001
+```
+
+
+```{r xcde xo vst}
+xcde %>% #dplyr::filter(new_xci != 'no XCI call') %>%
+  ggplot(aes(logFC_1to3, XO_vst))+
+  geom_smooth(method="lm", formula = y ~ splines2::nsk(x, df = 2), linewidth = 0.5, color = 'white', fill = 'grey90') +
+  geom_point(alpha = 0.8, aes(fill = short_tag, stroke = stroke_prof), shape = 21) +
+  annotate('text', 2.4,7.6, label = "atop( italic(R^2)==0.24, italic(p) < .0001)", parse = TRUE, size = rel(3)) +
+  scale_fill_manual(values = chr_tag_val) +
+  theme_bw()
+```
+
+```{r all mean}
+vst_mean_mod <- lm(logFC_1to3 ~ vst_mean, data = xcde) 
+vst_mean_emm <- vst_mean_mod %>% emmeans(~ vst_mean) 
+
+vst_mean_mod  %>% summary() # less interpretable,this are coefficients
+
+#eXO_spline1 <-  lm(abs_1to3 ~ splines2::nsk(XO_base_centered,df = 1), data = xcde)
+vst_mean_spline2 <-  lm(logFC_1to3 ~ splines2::nsk(vst_mean,df = 2), data = xcde)
+vst_mean_spline3 <-  lm(logFC_1to3 ~ splines2::nsk(vst_mean,df = 3), data = xcde)
+
+#MuMIn::AICc( seXO_spline2, seXY_spline3)
+
+anova(vst_mean_mod, vst_mean_spline2) |> tidy()
+
+vst_mean_spline2 %>% glance() %>% pull(adj.r.squared) %>% round(2)
+vst_mean_spline2 %>% glance() %>% pull(p.value) %>% round(4) # < .0001
+R_vst_mean <- vst_mean_spline2 %>% glance() %>% pull(adj.r.squared) %>% round(2)
+p_vst_mean <- vst_mean_spline2 %>% glance() %>% pull(p.value) %>% round(4) # < .0001
+
+Xa_mean_stat <- vst_mean_spline2 %>% glance()
+```
+
+
+```{r all mean plot}
+vst_mean_soft <- 
+  lm(logFC_1to3 ~ vst_mean, data = xcde, se_type = "HC3") |>
+  glance()
+
+vst_mean_plot <- 
+xcde %>% 
+  mutate(cond_label = case_when(logFC_1to3 > 2 & !str_starts(gene_name, 'ENSG') ~ gene_name,
+                                logFC_1to3 < 0 & !str_starts(gene_name, 'ENSG') ~ gene_name,
+                                .default = NA)
+         ) %>%
+  ggplot(aes(logFC_1to3, vst_mean))+
+  geom_smooth(method="lm", formula = y ~ splines2::nsk(x, df = 2), linewidth = 1,  fill = '#DCE6EC59', color = 'lightblue') +
+  geom_point(alpha = 0.8, aes(fill = short_tag, stroke = 0.85, shape = profile)) +
+  geom_text_repel(aes(label = cond_label), size = 3) +
+#  annotate('text', 2.4,13.6, label = "atop( italic(R^2)==0.24, italic(p) < .0001)", parse = TRUE, size = rel(3)) + # hard coded change
+  scale_fill_manual(values = chr_tag_val) +
+  scale_shape_manual(values = c(quadratic = 1, linear = 21)) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) 
+```
+
+```{r xcde monomean cpm}
+semono_mod <- lm(logFC_1to3 ~ mono_mean_centered, data = xcde, se_type = "HC3") 
+semono_emm <- semono_mod %>% emmeans(~ mono_mean_centered) 
+
+semono_mod  %>% summary() # less interpretable,this are coefficients
+
+#eXO_spline1 <-  lm(abs_1to3 ~ splines2::nsk(XO_base_centered,df = 1), data = xcde)
+mono_mean_spline2 <-  lm(logFC_1to3 ~ splines2::nsk(mono_mean_centered,df = 2), data = xcde)
+mono_mean_spline3 <-  lm(logFC_1to3 ~ splines2::nsk(mono_mean_centered,df = 3), data = xcde)
+
+#MuMIn::AICc( seXO_spline2, seXY_spline3)
+
+anova(semono_mod, mono_mean_spline2)
+
+mono_mean_spline2 %>% glance() %>% pull(adj.r.squared) %>% round(2)
+mono_mean_spline2 %>% glance() %>% pull(p.value) %>% round(4) # < .0001
+```
+
+
+
+
+```{rwip xcde XY centered}
+seXY_mod <- lm(logFC_1to3 ~ XY_base_centered, data = xcde, se_type = "HC3") 
+seXY_emm <- seXY_mod %>% emmeans(~ XY_base_centered) 
+
+seXY_mod %>% summary() # less interpretable,this are coefficients
+
+#eXO_spline1 <-  lm(abs_1to3 ~ splines2::nsk(XO_base_centered,df = 1), data = xcde)
+seXY_spline2 <-  lm(logFC_1to3 ~ splines2::nsk(XY_base_centered,df = 2), data = xcde)
+seXY_spline3 <-  lm(logFC_1to3 ~ splines2::nsk(XY_base_centered,df = 3), data = xcde)
+
+#MuMIn::AICc( seXO_spline2, seXY_spline3)
+
+anova(seXY_mod, seXY_spline2 )
+
+seXY_spline2 %>% glance() %>% pull(adj.r.squared) %>% round(2)
+seXY_spline2 %>% glance() %>% pull(p.value) %>% round(4) # < .0001
+```
+
+
+##### YCD ######
+
+
+```{r volc leg, eval=FALSE}
+volc_leg <- cowplot::get_legend(xlq_volc_xist  +
+  theme(
+      legend.key.size = unit(0.3, 'cm'),           # Must be unit()
+      legend.key.height = unit(0.3, 'cm'),         # Must be unit()
+      legend.key.width = unit(0.3, 'cm'),          # Must be unit()
+      legend.text = element_text(size = rel(0.7)), # Can use rel()
+      legend.title = element_text(size = rel(0.8)), # Can use rel()
+      legend.spacing.y = unit(0.05, 'cm'),         # Must be unit()
+      legend.spacing.x = unit(0.1, 'cm'),          # Must be unit()
+      legend.box.spacing = unit(0.1, 'cm'),        # Must be unit()
+      legend.margin = margin(t = 2, r = 2, b = 2, l = 2, unit = 'pt')
+    )
+)
+#uni_leg <- cowplot::get_legend(abs_plot)
+```
+```{r}
+fake_legend <- cowplot::get_legend(
+  lq |>
+  ggplot(aes(logFC_1to3, -log(P.Value_1to3))) +
+  geom_point(aes(shape = profile), fill = chr_tag_val['X_link']) +
+  scale_shape_manual(values = c(linear = 21, quadratic = 1)) +
+    labs(shape = 'SCD sensitivity\nprofile') +
+  theme_bw()
+)
+```
+
+
+```{r Yvolc, eval=FALSE}
+
+y_1to2 <- 
+sexchr_patterns %>%
+  dplyr::filter(ds == 'YCD') %>%
+  left_join(hg38Yf_mm %>% rownames_to_column('item'), by = 'item') %>%
+  mutate(
+    pi_score = abs(logFC) * -log(adj.P.Val) ,
+    cond_label = case_when(
+      rank(dplyr::desc(pi_score)) < 15 & !str_starts(gene_symbol, 'ENSG') & adj.P.Val < 0.05 ~ gene_symbol, 
+      logFC > 0.5 & !str_starts(gene_symbol, 'ENSG') ~ gene_symbol, 
+      chr_tag == 'X_link' ~ gene_symbol,
+      .default = ''),
+    gam_face = if_else(is_gametolog == 'no_g', 'plain', 'bold')) 
+
+upy_volc_plot <- 
+y_1to2 %>% dplyr::filter(dir == 'positive') %>%
+ggplot(aes(logFC, -log(adj.P.Val), colour = short_tag)) +
+  geom_point() +
+  #geom_point(data = YF_21[YF_21$is_ycd == 'no',],  color = 'grey', alpha = 0.3) +
+  #geom_point(data = YF_21[YF_21$is_ycd == 'yes' & YF_21$short_tag != 'PAR',], aes(color = short_tag), size = 2, alpha = 0.85) +
+  #geom_point(data = YF_21[YF_21$is_ycd == 'yes' & YF_21$short_tag == 'PAR',], aes(color = short_tag), size = 2, alpha = 0.85) +
+  geom_text_repel(aes(label = cond_label, fontface = gam_face), size = rel(3), max.overlaps = 30, segment.alpha = 0, show.legend = FALSE) +
+ # geom_text_repel(aes(label = cond_label), max.overlaps = 30) +
+   scale_color_manual(
+    values = chr_tag_val,      #   breaks = c('Y_link', 'X_link', 'PAR', 'not XDS')
+    labels = c(Y_link = 'Y-linked', X_link = 'X-linked', PAR ='PAR')
+    ) + 
+ coord_cartesian(xlim = c(0, 1.55)) +
+  theme_classic() +
+  labs(colour = 'Chromosome\nRegion')
+```
+```{r}
+chr_region_legend <-
+  cowplot::get_legend(upy_volc_plot)
+```
+
+
+```{r Yvolc, eval=FALSE}
+
+SCD_patterns <- bind_rows(sexchr_patterns, aut_patterns, .id = 'where') %>% ungroup()
+
+y_0to2 <- 
+  SCD_patterns %>%
+  dplyr::filter(ds == 'YCD' & chr_tag != 'Autosome') %>% 
+  left_join(hg38_mm$hg38YCD_mm %>% rownames_to_column('item'), by = 'item') %>%
+  mutate(
+    pi_score = abs(logFC) * -log(adj.P.Val) ,
+    cond_label = case_when(
+    #  rank(dplyr::desc(pi_score)) < 15 & !str_starts(gene_symbol, 'ENSG') & adj.P.Val < 0.05 ~ gene_symbol, 
+      dir == 'negative' & !str_starts(gene_symbol, 'ENSG') ~ gene_symbol, .default = ''),
+    gam_face = if_else(is_gametolog == 'no_g', 'plain', 'bold')) 
+
+y_0to2_plot <- 
+y_0to2 %>%
+  dplyr::filter(chr_tag != 'Y_link') %>%
+ggplot(aes(logFC, -log(adj.P.Val))) +
+  geom_point(aes(colour = short_tag)) +
+  #geom_point(data = YF_21[YF_21$is_ycd == 'no',],  color = 'grey', alpha = 0.3) +
+  #geom_point(data = YF_21[YF_21$is_ycd == 'yes' & YF_21$short_tag != 'PAR',], aes(color = short_tag), size = 2, alpha = 0.85) +
+  #geom_point(data = YF_21[YF_21$is_ycd == 'yes' & YF_21$short_tag == 'PAR',], aes(color = short_tag), size = 2, alpha = 0.85) +
+  geom_text_repel(aes(label = cond_label, fontface = gam_face), size = rel(3), max.overlaps = 10, segment.alpha = 0.3, show.legend = FALSE) +
+ # geom_text_repel(aes(label = cond_label), max.overlaps = 30) +
+   scale_color_manual(
+    values = chr_tag_val       #   breaks = c('Y_link', 'X_link', 'PAR', 'not XDS')
+    ) + 
+ coord_cartesian(xlim = c(-0.55, 0)) +
+  theme_classic()
+```
+
+```{r yds_gams}
+
+if (!exists('gam_pairs_new')) {
+  gam_pairs_new <- 
+    data.frame(
+    'y_gametolog' = c("AMELY", "DDX3Y", "EIF1AY",
+                 "HSFY1", "HSFY2", "KDM5D", 
+                  "MRAX5Y",
+                 "NLGN4Y", "PCDH11Y", "PRKY", 
+                 "RBMY1A1, RBMY1B, RBMY1D, RBMY1E, RBMY1F, RBMY1J", 
+                 "RPS4Y1, RPS4Y2",
+                 "SRY", "TBL1Y", "TGIF2LY", "TMSB4Y", 
+                 "TSPY1, TSPY10, TSPY2, TSPY3, TSPY4, TSPY8, TSPY9P",
+                 "TXLNGY", "USP9Y",  "UTY", 
+                 "VCY, VCY1B", 
+                 "ZFY"),
+    'x_gametolog' = c("AMELX", "DDX3X", "EIF1AX", 
+                 "HSFX1", "HSFX2", "KDM5C", 
+                 "MRAX5",
+                 "NLGN4X", "PCDH11X", "PRKX",
+                 "RBMX", 
+                 "RPS4X", 
+                 "SOX3", "TBL1X", "TGIF2LX","TMSB4X", 
+                 "TSPYL2", 
+                 "TXLNG", "USP9X", "KDM6A", 
+                 "VCX, VCX2, VCX3A, VCX3B", 
+                 "ZFX")
+   ) %>%
+    separate_longer_delim(y_gametolog, ',')%>%
+    separate_longer_delim(x_gametolog, ',')
+} 
+
+gam_fullpair <- data.frame(
+  'gene_symbol' = c(gam_pairs_new$y_gametolog, 
+                    gam_pairs_new$x_gametolog),
+  'gam_pair' = c(gam_pairs_new$x_gametolog, 
+                 gam_pairs_new$y_gametolog)
+)
+
+```
+
+
+
+```{r gam_2to1}
+# compare using beta 2 to 1 for both gametologs (since expected X beta is lower than Y beta because of regulation...?)
+
+gam_2to1 <-
+gam_pairs_new %>%
+  left_join(
+     hg38Xf_2to1 %>% rownames_to_column('gene_id') %>% 
+                     left_join(rowData(uneroded_se) %>%
+                               as.data.frame() %>%
+                               dplyr::select(gene_id, gene_symbol), by = 'gene_id') %>%
+     mutate(X_p = adj.P.Val,
+            X_lfc = logFC,
+            x_gametolog = gene_symbol,
+           .keep = 'none'),
+    by = 'x_gametolog') %>%
+  left_join(
+     hg38Yf_mm %>% rownames_to_column('gene_id') %>% 
+                   left_join(rowData(uneroded_se) %>%
+                             as.data.frame() %>%
+                             dplyr::select(gene_id, gene_symbol), by = 'gene_id') %>%
+     mutate(Y_p = adj.P.Val,
+            Y_lfc = logFC,
+            y_gametolog = gene_symbol,
+           .keep = 'none'),
+    by = 'y_gametolog') %>% 
+
+  left_join(
+    sexchr_patterns %>% dplyr::select(gene_symbol, ds_profile),
+    by = join_by('x_gametolog' == 'gene_symbol')
+  ) %>%
+  left_join(
+    sexchr_patterns %>% dplyr::select(gene_symbol, ds_profile),
+    by = join_by('y_gametolog' == 'gene_symbol')
+  ) %>%
+  replace_na(list(ds_profile.x = 'Not XCD', ds_profile.y = 'Not YCD')) %>%
+  mutate(gam_pair = paste0(x_gametolog, '/', y_gametolog),
+         model_ds = paste0(ds_profile.x, '/', ds_profile.y),
+         # probably redundant:
+          is_deg = case_when(
+           y_gametolog %in% sexchr_patterns$gene_symbol & x_gametolog %in% sexchr_patterns$gene_symbol ~ 'both', 
+           !y_gametolog %in% sexchr_patterns$gene_symbol & !x_gametolog %in% sexchr_patterns$gene_symbol ~ 'none',
+          y_gametolog %in% sexchr_patterns$gene_symbol & !x_gametolog %in% sexchr_patterns$gene_symbol ~ 'only y',
+           !y_gametolog %in% sexchr_patterns$gene_symbol & x_gametolog %in% sexchr_patterns$gene_symbol ~'only x' )
+           ) %>%
+  #dplyr::filter(gam_ds != 'Not XCD/Not XCD')
+  dplyr::filter(!(is.na(Y_lfc) | is.na(X_lfc)))
+```
+
+```{r}
+gam_mod <- lm(X_lfc ~ Y_lfc, gam_2to1 ) 
+gam_mod %>% glance()
+```
+
+
+```{r gam_pair_plot}
+#| fig-height: 5
+#| fig-width: 5
+#cor.test(gam_2to1$Y_lfc, gam_2to1$X_lfc) #p-value = 0.4564
+#lm(Y_lfc ~ X_lfc, data = gam_2to1) %>% tidy() #p-value: 0.4564
+#gam2to1_stat <- lm(X_lfc ~ Y_lfc, gam_pair4to1) %>% glance()
+gam2to1_pearson <-  cor_test(data = gam_2to1, vars = c(X_lfc, Y_lfc), method = 'pearson')
+gam2to1_spearman <- cor_test(data = gam_2to1, vars = c(X_lfc, Y_lfc), method = 'spearman')
+
+
+gam_pair_plot <- 
+gam_2to1 %>%
+  ggplot(aes(X_lfc, Y_lfc, label = gam_pair)) +
+  geom_point(fill = 'lightblue2', shape = 21, size = 4, alpha = 0.5) + #aes(fill =  model_ds),
+  #scale_fill_discrete(palette = 'Set 1') +
+  geom_smooth(method = 'lm', se = FALSE, alpha = 0.25, linewidth = 0.5, color = 'grey') +
+  geom_abline(linetype = 3, color = 'blue2') +
+  geom_text_repel(size = 3,  segment.alpha = 0.3, max.overlaps = 20) + #position = position_jitter(height = 0.2)
+  annotate(geom = 'text', y = 0.2, x = 0.9, 
+           label = paste0(expression('italic(r)[s] == '), round(gam2to1_spearman$cor, 2)), 
+           parse = TRUE, size = rel(3), color = 'grey45') +
+  annotate(geom = 'text', y = 0.25, x = 0.9, 
+           label = paste0(expression('italic(p) == '), round(gam2to1_spearman$p, 2)), 
+           parse = TRUE, size = rel(3), color = 'grey45') +
+
+  coord_cartesian(xlim = c(-0.1,1.1), ylim = c(-0.1,1.1)) +
+
+  scale_x_continuous(breaks = c(0.3,0.6,0.9)) +
+  scale_y_continuous(breaks = c(0.3,0.6,0.9)) +
+  theme_bw() +
+  labs(
+    x = expression('log2FC'['XCD2']),
+    y = expression('log2FC'['YCD2']),
+    fill = 'Profiles'
+       )
+
+
+```
+
+```{r}
+#| fig-height: 5
+#| fig-width: 5
+cisYCD <- gam_2to1 %>% dplyr::filter(ds_profile.y == 'YCD linear positive')
+cisYCD_pearson <-  cor_test(data = cisYCD, vars = c(X_lfc, Y_lfc), method = 'pearson')
+
+
+#cisYCD_plot <- 
+cisYCD %>%
+  ggplot(aes(X_lfc, Y_lfc, label = gam_pair)) +
+  geom_smooth(method = 'lm', se = FALSE, alpha = 0.25, linewidth = 0.5, color = 'lightblue') +
+  geom_point(fill = 'purple3', shape = 21, size = rel(3), stroke = rel(0.13), alpha = 0.5) + #aes(fill =  model_ds),
+  #scale_fill_discrete(palette = 'Set 1') +
+
+  geom_abline(linetype = 3, color = 'blue4') +
+  geom_text_repel( segment.alpha = 0.3, max.overlaps = 10) + #position = position_jitter(height = 0.2)
+  annotate(geom = 'text', y = 0.2, x = 0.9, 
+           label = paste0(expression('italic(r)[s] == '), round(cisYCD_pearson$cor, 2)), 
+           parse = TRUE, size = rel(3), color = 'grey45') +
+  annotate(geom = 'text', y = 0.25, x = 0.9, 
+           label = paste0(expression('italic(p) == '), round(cisYCD_pearson$p, 2)), 
+           parse = TRUE, size = rel(3), color = 'grey45') +
+
+  coord_cartesian(xlim = c(-0.1,1.1), ylim = c(-0.1,1.1)) +
+
+  scale_x_continuous(breaks = c(0.3,0.6,0.9)) +
+  scale_y_continuous(breaks = c(0.3,0.6,0.9)) +
+  theme_bw() +
+  theme(strip.background = element_blank()) +
+  labs(
+    x = expression('log2FC'['XCD2']),
+    y = expression('log2FC'['YCD2']),
+    fill = 'Profiles'
+       )
+```
+
+
+
+```{r}
+#| fig-height: 5
+#| fig-width: 5
+
+SCDgam_2to1  <-
+gam_2to1  |>
+  dplyr::filter(is_deg != 'none')
+
+SCDgam2to1_pearson <-  cor_test(data = SCDgam_2to1, vars = c(X_lfc, Y_lfc), method = 'pearson')
+SCDgam2to1_spearman <- cor_test(data = SCDgam_2to1, vars = c(X_lfc, Y_lfc), method = 'spearman')
+
+
+#SCDonly_gampair_plot <- 
+  SCDgam_2to1 |>
+  ggplot(aes(X_lfc, Y_lfc, label = gam_pair)) +
+  geom_point(fill = 'lightblue2', shape = 21, size = 4, alpha = 0.5) + #aes(fill =  model_ds),
+  #scale_fill_discrete(palette = 'Set 1') +
+  geom_smooth(method = 'lm', se = FALSE, alpha = 0.25, linewidth = 0.5, color = 'grey') +
+  geom_abline(linetype = 3, color = 'blue2') +
+  geom_text_repel(size = 3,  segment.alpha = 0.3, max.overlaps = 20) + #position = position_jitter(height = 0.2)
+  annotate(geom = 'text', y = 0.2, x = 0.9, 
+           label = paste0(expression('italic(r)[s] == '), round(SCDgam2to1_spearman$cor, 30)), 
+           parse = TRUE, size = rel(3), color = 'grey45') +
+  annotate(geom = 'text', y = 0.25, x = 0.9, 
+           label = paste0(expression('italic(p) == '), round(SCDgam2to1_spearman$p, 30)), 
+           parse = TRUE, size = rel(3), color = 'grey45') +
+
+  coord_cartesian(xlim = c(-0.1,1.1), ylim = c(-0.1,1.1)) +
+
+  scale_x_continuous(breaks = c(0.3,0.6,0.9)) +
+  scale_y_continuous(breaks = c(0.3,0.6,0.9)) +
+  theme_bw() +
+  labs(
+    x = expression('log2FC'['XCD2']),
+    y = expression('log2FC'['YCD2']),
+    fill = 'Profiles'
+       )
+
+```
+
+
+
+
+
+```{r}
+
+PAR_1to4 <- 
+  sexchr_patterns %>% ungroup() |> #unnest(biotype) |>
+  dplyr::filter(short_tag == 'PAR' & ds == 'YCD + XCD') |>
+  left_join(gen50_ensg, by = 'ENSG_id') |>
+    left_join(
+      hg38_mm$hg38XCDL_mm %>% 
+        rownames_to_column('item') %>%
+        mutate(XCDlfc = logFC,
+               XCDpadj = adj.P.Val,
+               .keep = 'unused'),
+      by = 'item') %>%
+    left_join(
+      hg38_mm$hg38YCD_mm %>%
+        rownames_to_column('item') %>%
+        mutate(YCDlfc = logFC,
+             YCDpadj = adj.P.Val,
+             .keep = 'unused'),
+      by = 'item') 
+
+
+PAR1to4_stat <- 
+  cor_test(vars = c(XCDlfc, YCDlfc), data = PAR_1to4, method =  'spearman') 
+
+
+
+PAR_1to4_cor_plot <- 
+PAR_1to4 %>%
+  mutate(cond_label = if_else(str_starts(gene_name, 'ENSG0'), '', gene_name)) |>
+  ggplot(aes(XCDlfc, YCDlfc)) +
+
+ # geom_smooth(method = 'loess', span= 3, se = FALSE, alpha = 0.3) +
+  geom_smooth(method = 'gam', formula = y ~ s(x, k = 1), se = TRUE, fill = '#DCE6EC59', color = 'lightblue') +
+  geom_point(aes(fill = chr_tag), shape = 21, alpha = 0.85, size = rel(3), stroke = rel(0.13)) +
+  geom_abline(lty = 3) +
+  geom_text_repel(aes(label = cond_label), segment.alpha = 0.25) +
+ # scale_shape_manual(values = c('positive' = 24)) +
+ # geom_text_repel(aes(label = cond_label), segment.alpha = 0.25) +
+  scale_fill_manual(values = c('X_link' = '#332288', 
+                               'PAR1' = '#DDCC77', 
+                               'PAR_border' = 'yellow4', 
+                               'PAR2' = '#C18F32'),
+                    labels =  c('X_link' = 'NPX', 
+                               'PAR1' = 'PAR1', 
+                               'PAR_border' = 'PAR boundary', 
+                               'PAR2' = 'PAR2'), 
+                    breaks = c('X_link', 'PAR_border', 
+                               'PAR1', 'PAR2')
+                    ) +
+ # coord_cartesian(xlim = c(0.25,1), ylim = c(0.25,1)) +
+  annotate(geom = 'text', y = 0.1, x = 5.5, label = paste0(expression('italic(r[s]) == '), round(PAR1to4_stat$cor, 2)) , parse = TRUE, size = rel(3), color = 'grey45') +
+  annotate(geom = 'text', y = 0.05, x = 5.5, label = paste0(expression('italic(p) == '), round(PAR1to4_stat$p, 3)) , parse = TRUE, size = rel(3), color = 'grey45') +
+  coord_cartesian(xlim = c(3.5,6), ylim = c(0,0.8)) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  labs(
+    x = 'XCD log2FC',
+    y = 'YCD log2FC'
+  )
+```
+
+```{r all X chromosome 1to2}
+### across all X-chromosome genes, evaluate 1to 2 YCD vs XCD correltaiton
+
+all_Xchr <- 
+hg38Xf_2to1 %>%
+  mutate(ENSG_id = str_extract(rownames(.), '^[^.]+')) %>%
+   left_join(
+    uneroded_se %>% rowData %>% as.data.frame() %>% dplyr::select(ENSG_id, chr_tag),
+    by = 'ENSG_id'
+            ) %>%
+  dplyr::filter(str_detect(chr_tag, 'X_link') | str_detect(chr_tag, 'PAR')) %>%
+  left_join(
+    gen49_uneroded %>% rowData %>% as.data.frame() %>% dplyr::select(ENSG_id, gene_name, XCI_merged, gene_type),
+    by = 'ENSG_id'
+            ) %>% 
+  ## uneroded_se %>% rowData() %>% as.data.frame() %>% pull(chr_tag) %>% table() is ok, when chr location needed use uneroded_se, not gen49
+  #dplyr::filter(is.na(chr)) # Y have 300 unmatching ENSGs in the whole set and 6 in X chromosome, none of them signivicant and with an average expression very low, so they can be disregarded eventually and without gen name, probable uncharacterized, oen potential sirna
+#dplyr::filter(str_detect(chr, 'X')) %>% #son 810
+  left_join(
+      hg38Xf_2to1 %>% 
+        mutate(ENSG_id = str_extract(rownames(.), '^[^.]+'),
+               XCD2_lfc = logFC,
+               XCD2_padj = adj.P.Val,
+               XCD2_pi = logFC * -log(adj.P.Val),
+               .keep = 'none'),
+      by = 'ENSG_id') %>%
+    left_join(
+      hg38Yf_mm %>%
+        mutate(ENSG_id = str_extract(rownames(.), '^[^.]+'),
+               YCD2_lfc = logFC,
+               YC2D_padj = adj.P.Val,
+               YCD2_pi = logFC * -log(adj.P.Val),
+               .keep = 'none'),
+      by = 'ENSG_id') %>%
+  mutate(bio_clean = case_when(
+           gene_type == 'protein_coding' ~ 'protein-coding',
+           gene_type == 'lncRNA' ~ gene_type,
+           str_detect(gene_type, 'pseudogene') ~ 'pseudogene',
+           .default = 'other') %>% factor(levels = c('protein-coding', 'lncRNA', 'pseudogene', 'other' ) )
+         ) 
+
+allXchr_spearman <- cor_test(data = all_Xchr, vars = c(XCD2_lfc, YCD2_lfc), method = 'spearman')
+
+allXchr_clean <-
+  all_Xchr %>% dplyr::filter(gene_name != 'XIST' & bio_clean != 'other') %>%
+   cor_test(vars = c(XCD2_lfc, YCD2_lfc), method = 'spearman')
+```
+
+```{r}
+xch_lfc <- 
+  all_Xchr %>% column_to_rownames('ENSG_id') %>% dplyr::select(XCD2_lfc, YCD2_lfc) %>% as.matrix()
+
+# Run PCA on the log2FC matrix (scale = FALSE preserves log scale)
+xch_pc <- prcomp(xch_lfc) #default center = TRUE,  scale. = FALSE
+
+xch_slope <- xch_pc$rotation[2,1] / xch_pc$rotation[1,1]
+xch_intercept = xch_pc$center[2] - xch_slope * xch_pc$center[1]
+
+xch_slope_test5A <- smatr::sma(YCD2_lfc ~ XCD2_lfc, data = all_Xchr, slope.test = 1, method = "MA")
+xch_slope_test5A |> summary()
+```
+
+
+
+
+
+
+```{r whole chrX plot}
+#| fig-height: 7.2
+#| fig-width: 7.2
+
+
+all_chr_plot <- 
+all_Xchr %>%
+  mutate(
+    cond_label = case_when(
+      (YCD2_lfc < -0.9 | YCD2_lfc > 1 | XCD2_lfc > 1.5 | XCD2_lfc < 0.5)  & !str_starts(gene_name, 'ENSG') ~ gene_name,
+      TRUE ~ '')) %>%
+  dplyr::filter(gene_name != 'XIST' & bio_clean != 'other') %>%
+  ggplot(aes(XCD2_lfc, YCD2_lfc)) +
+    geom_abline(slope = xch_slope, intercept = xch_intercept, colour = 'lightblue3' ) +
+
+# geom_smooth(method = 'loess', span = 3, se = FALSE, colour = 'lightblue3', alpha = 0.1) +
+
+  # geom_smooth(method = 'gam', formula = y ~ s(x, k = 0.1), se = FALSE, colour = '#9AC0CD80') +
+  #geom_smooth(method = 'lm', se = FALSE, color = 'lightblue3') +
+  geom_abline(lty = 3) +
+  #geom_vline(xintercept = 0, lty = 2, color = 'grey') +
+  #geom_hline(yintercept = 0, lty = 2, color = 'grey') +
+  geom_point(aes(fill = chr_tag, color = chr_tag), shape = 21, alpha = 0.5) + #aes(fill = after_scale(alpha(fill, 0.4) +
+  geom_text_repel(aes(label = cond_label), segment.alpha = 0.25) +
+  scale_fill_manual(values = c('X_link' = '#332288', 
+                               'PAR1' = '#DDCC77', 
+                               'PAR_border' = 'yellow4', 
+                               'PAR2' = '#C18F32'),
+                    labels =  c('X_link' = 'NPX', 
+                               'PAR1' = 'PAR1', 
+                               'PAR_border' = 'PAR boundary', 
+                               'PAR2' = 'PAR2'), 
+                    breaks = c('X_link', 'PAR_border', 
+                               'PAR1', 'PAR2')
+                    ) +
+  scale_color_manual(values = c('X_link' = '#332288', 
+                               'PAR1' = '#DDCC77', 
+                               'PAR_border' = 'yellow4', 
+                               'PAR2' = '#C18F32'),
+                    labels =  c('X_link' = 'NPX', 
+                               'PAR1' = 'PAR1', 
+                               'PAR_border' = 'PAR boundary', 
+                               'PAR2' = 'PAR2'), 
+                    breaks = c('X_link', 'PAR_border', 
+                               'PAR1', 'PAR2')
+                    ) +
+ # coord_cartesian(xlim = c(0.25,1), ylim = c(0.25,1)) +
+  annotate(geom = 'text', x = 1.4, y = -3, label = paste0(expression('italic(r)[s]=='), round(allXchr_clean$cor, 2)), parse = TRUE, size = 3.7, color = 'grey45') + 
+  annotate(geom = 'text', x = 1.4, y = -3.3, label = paste0(expression('italic(p)=='), round(allXchr_clean$p, 5)), parse = TRUE, size = 3.7, color = 'grey45') +
+  labs(
+    x = expression(log2FC[XCD2]),
+    y = expression(log2FC[YCD2]),
+    fill = 'Genome region'
+  ) + 
+  theme_bw() #+
+ # theme(legend.position = 'bottom')
+
+# note the Y negative outlier is relevant in logfc, but doen't have p adjusted value (even though has sig p value), probably better to use Pi metric # Y excluded 'uther biotypes, since theiy are not reliable in ribozero
+
+```
+
+
+```{r}
+5
+```
+
+
+
+
+####panel 3  cuter #####
+```{r panel3 v2, warning=FALSE, message=FALSE}
+#| fig-height: 17
+#| fig-width: 13.4
+
+#jpeg('new_panel3.jpeg', res = 1200, height = 17, width = 13.4, units = 'in')
+#### 3 original
+quad_path_plot + theme(legend.position = 'none',  ######done
+                       strip.text = element_blank(),
+                       axis.title = element_text(size = 9),
+                       plot.tag = element_text(hjust = -4),
+                       axis.title.y = element_text(vjust = -15) #margin = margin(r= -100))
+                       ) + labs(tag = 'a') +
+wrap_plots(
+  xlq_volc_xist  + theme(legend.position = 'none', ######done
+                         axis.title.x = element_text(size = 9, hjust = 4.5),
+                         axis.title.y = element_text(size = 9, hjust = -4)
+                         ) + labs(tag = 'b'),
+  xlq_down_plot +  theme(#plot.title = element_text(hjust = 0.5, size = rel(0.83)), ######done
+                       #  plot.margin = margin(t = 0, r = 10, b = 10, l = 10),
+                         axis.title.x = element_text(size = 9, hjust = 1.5),
+                   legend.position = 'none') + labs(y= '', tags = 'd'), #title = 'Negative', 
+  ncol = 1, heights = c(0.43, 0.57)) + #plot_layout(guides = 'collect', axis_titles = 'collect', axes = 'collect' ) +
+xlq_up_plot + ######done
+  scale_y_continuous(limits = c(0,20), breaks = seq(0, 15, by = 5)) +
+  theme(#plot.title = element_text(hjust = 0.2, size = rel(0.83)), 
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = 'none') + 
+  labs(tag = 'c') + #title = 'Positive', 
+#wrap_elements(volc_leg) + theme(plot.margin = margin(l = 0.8, b = 0.4, r = 0.95, t = 0.75, unit = 'cm')) + 
+ups_plot + ##### done
+  theme(plot.subtitle = element_text(hjust = 0), 
+        plot.tag = element_text(hjust = -4),
+      #  axis.text.y = element_blank(),
+       # axis.title.y = element_blank(),
+        legend.position = 'none', legend.position.inside = c(0.91, 0.91)) + 
+  labs(tag = 'e') + 
+#inset_element(wrap_elements(uni_leg), l = 0.8, b = 0.5, r = 0.9, t = 0.6, align_to = 'plot') +  #wrap_elements(uni_leg) +
+vst_mean_plot + 
+  labs(x = expression(log2FC[XCD3]),
+       y = expression(Xa~expression~(mean)),
+       tag = 'f') + 
+  theme(legend.position = 'none') +
+
+###### 4 original
+upy_volc_plot + 
+ # geom_rect(aes(xmin = -0.45, xmax = 0.5, ymin = -0.3, ymax = 1.7), alpha = 0, colour = 'red4', linejoin = 'bevel', linetype = '22', linewidth = 0.2) +
+  theme(legend.position = 'none',
+        plot.tag = element_text(hjust = -4),
+        axis.title.y = element_text(vjust = -15)) + #, legend.position.inside = c(0.97, 0.8), plot.tag = element_text(face = 'bold')) +
+  labs(x = expression(log2FC[YCD2]), tag = 'g') + 
+inset_element(
+  y_0to2_plot +  
+  #  scale_x_continuous(limits = c(-0.55, 0.55)) + labs(tag = 'b') +
+  #  coord_cartesian(xlim = c(-0.5, 0.5), clip = 'off', expand = FALSE) +
+    theme(axis.title.y = element_blank(), legend.position = 'none', plot.tag = element_text(face = 'bold')), 
+    left = 0.01, bottom = 0.5, right = 0.5, top = 1) +
+gam_pair_plot + 
+    labs(tag = 'h') + theme(plot.tag = element_text(face = 'bold')) +
+  
+###### 5 original
+PAR_1to4_cor_plot + labs(tag = 'i') + theme(legend.position = 'none') +
+all_chr_plot + labs(tag = 'j') + theme(legend.position = 'none') +
+wrap_elements(chr_region_legend) +
+wrap_elements(
+  fake_legend
+) +
+    
+ ###############
+plot_layout(
+#  guides = 'collect', 
+ # axis_titles = 'collect',
+ # axes = 'collect',
+ # ncol = 2,
+  design = '1111#222333
+            4444#555555
+            4444#777888
+            6666#999999
+            ZZNN#999999
+            ',
+ heights = c(1, 1, 1, 1, 0.5),
+ widths = c(1,1,1,1,0.15,1,1,1,1,1,1)
+              ) &
+  theme(plot.tag = element_text(face = 'bold'),
+        plot.tag.position = c(-0.025, 0.97),
+        axis.title = element_text(size = 9)
+        )
+
+
+
+#dev.off()
+```
+
+
+
+####panel 3  cleaner #####
+```{r panel3 v3, warning=FALSE, message=FALSE}
+#| fig-height: 10
+#| fig-width: 10
+
+#jpeg('new_panel3.jpeg', res = 1200, height = 17, width = 13.4, units = 'in')
+#### 3 original
+quad_path_plot + #a
+  theme_classic() +
+  theme(legend.position = 'none',  
+        strip.text = element_blank(),
+        axis.title = element_text(size = 9),
+        plot.tag = element_text(hjust = -4),
+        axis.title.y = element_text(vjust = -15)) + 
+  labs(tag = 'a') +
+xlq_volc_xist + #b
+    theme_classic() +
+  theme(legend.position = 'none', 
+        axis.title.x = element_text(size = 9, hjust = 4.5),
+        axis.title.y = element_text(size = 9, hjust = -4)) +
+  labs(tag = 'b') +
+xlq_up_plot + #c
+    theme_classic() +
+  scale_y_continuous(limits = c(0,20), breaks = seq(0, 15, by = 5)) +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = 'none') + 
+  labs(tag = 'c') +
+xlq_down_plot + #d
+    theme_classic() +
+  theme(axis.title.x = element_text(size = 9, hjust = 1.5),
+        legend.position = 'none') + 
+  labs(y= '', tags = 'd') +  
+#plot_layout(guides = 'collect', axis_titles = 'collect', axes = 'collect', heights = c(3,1), ncol = 1, nrow = 2) +
+ups_plot + #e
+    theme_classic() +
+  theme(plot.subtitle = element_text(hjust = 0), 
+        plot.tag = element_text(hjust = -4),
+                strip.background = element_blank(),
+        legend.position = 'none', 
+        legend.position.inside = c(0.91, 0.91)) + 
+  labs(tag = 'e') + 
+vst_mean_plot + #f
+    theme_classic() +
+  theme(legend.position = 'none') +
+  labs(x = expression(log2FC[XCD3]),
+       y = expression(Xa~expression~(mean)),
+       tag = 'f') + 
+upy_volc_plot + #g
+    theme_classic() +
+  theme(legend.position = 'none',
+    #    plot.tag = element_text(hjust = -4),
+        axis.title.y = element_text(vjust = -15)) +
+  labs(x = expression(log2FC[YCD2]), tag = 'g') + 
+inset_element(
+  y_0to2_plot +  
+  theme(axis.title.y = element_blank(), legend.position = 'none', 
+        plot.tag = element_text(face = 'bold')), 
+  left = 0.01, bottom = 0.5, right = 0.5, top = 1) +
+PAR_1to4_cor_plot + 
+    theme_classic() +
+  theme(legend.position = 'none') +
+  labs(tag = 'h') +
+#wrap_elements(chr_region_legend) +
+#wrap_elements(fake_legend) +
+ ###############
+plot_layout(
+#  guides = 'collect', 
+ # axis_titles = 'collect',
+ # axes = 'collect',
+ # ncol = 2,
+  design = 'aaaa#bbcccc
+            aaaa#bbdddd
+            eeeffffgggg
+            eeeffffhhhh',
+ heights = c(1, 0.35, 1, 1, 0.5),
+ widths = c(1,1,1,1,0.15,1,1,1,1,1,1)
+              ) &
+  theme(plot.tag = element_text(face = 'bold'),
+        plot.tag.position = c(-0.025, 0.97),
+        axis.title = element_text(size = 9)
+        )
+
+
+
+#dev.off()
+```
+
+####panel 3  cleaner with insets #####
+
+
+
+```{r panel3 v3, warning=FALSE, message=FALSE}
+#| fig-height: 11
+#| fig-width: 11
+
+pdf('new_panel2.pdf', height = 10, width = 10)
+#jpeg('new_panel3.jpeg', res = 1200, height = 17, width = 13.4, units = 'in')
+#### 3 original
+quad_path_plot + #a
+  theme_classic() +
+  theme(legend.position = 'none',  
+        strip.text = element_blank(),
+        axis.title = element_text(size = 9),
+        plot.tag = element_text(hjust = -4),
+        axis.title.y = element_text(vjust = -15)) + 
+  labs(tag = 'a') +
+xlq_volc_xist + #b
+    theme_classic() +
+  theme(legend.position = 'none', 
+        axis.title.x = element_text(size = 9, hjust = 4.5),
+        axis.title.y = element_text(size = 9, hjust = -4)) +
+  labs(tag = 'b') +
+xlq_up_plot + #c
+    theme_classic() +
+  scale_y_continuous(limits = c(0,20), breaks = seq(0, 15, by = 5)) +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = 'none') + 
+  labs(tag = 'c') +
+  
+inset_element(
+  xlq_down_plot + #d
+    theme_classic() +
+  theme(axis.title.x = element_text(size = 9, hjust = 1.5),
+        plot.tag = element_text(face = 'bold'),
+        legend.position = 'none') + 
+  labs(y= '', tags = 'd') , 
+  left = 0.5, bottom = 0.45, right = 0.99, top = 1) +
+  
+
+#plot_layout(guides = 'collect', axis_titles = 'collect', axes = 'collect', heights = c(3,1), ncol = 1, nrow = 2) +
+ups_plot + #e
+    theme_classic() +
+  theme(plot.subtitle = element_text(hjust = 0), 
+        plot.tag = element_text(hjust = -4),
+                strip.background = element_blank(),
+        legend.position = 'none', 
+        legend.position.inside = c(0.91, 0.91)) + 
+  labs(tag = 'e') + 
+vst_mean_plot + #f
+    theme_classic() +
+  theme(legend.position = 'none') +
+  labs(x = expression(log2FC[XCD3]),
+       y = expression(Xa~expression~(mean)),
+       tag = 'f') + 
+upy_volc_plot + #g
+    theme_classic() +
+  theme(legend.position = 'none',
+    #    plot.tag = element_text(hjust = -4),
+        axis.title.y = element_text(vjust = -15)) +
+  labs(x = expression(log2FC[YCD2]), tag = 'g') + 
+inset_element(
+  y_0to2_plot +  
+  theme(axis.title.y = element_blank(), legend.position = 'none', 
+        plot.tag = element_text(face = 'bold')), 
+  left = 0.01, bottom = 0.5, right = 0.5, top = 1) +
+PAR_1to4_cor_plot + 
+    theme_classic() +
+  theme(legend.position = 'none') +
+  labs(tag = 'h') +
+#wrap_elements(chr_region_legend) +
+#wrap_elements(fake_legend) +
+ ###############
+plot_layout(
+#  guides = 'collect', 
+ # axis_titles = 'collect',
+ # axes = 'collect',
+ # ncol = 2,
+  design = 'aaaa#bbcccc
+            eeeffffgggg
+            eeeffffhhhh',
+ heights = c(1, 1, 0.75, 0.25),
+ widths = c(1,1,1,1,0.15,1,1,1,1,1,1)
+              ) &
+  theme(plot.tag = element_text(face = 'bold'),
+        plot.tag.position = c(-0.025, 0.97),
+        axis.title = element_text(size = 9)
+        )
+
+
+
+dev.off()
+```
+Supplementary 5
+
+
+```{r}
+
+par_neg <-
+sexchr_patterns |>
+  dplyr::filter(ds_profile == 'YCD + XCD linear negative') |>
+left_join(all2to1_clean)
+
+par_neg |>
+cor_test(vars = c(XCDlfc, YCDlfc), method = 'spearman') #-0.5	6	1	S
+
+```
+
+### fg for panel 4, autosomes dir
+
+
+### copy ###
+ 
+```{r sexchr dir}
+
+
+aut_dirsv2 <- 
+  aut_patterns |>
+  dplyr::count(ds, profile, dir, short_tag) |>
+  mutate(
+    dir_count = case_when(dir == 'negative' & profile == 'linear' ~ -n,
+                          dir == 'concave' & profile == 'quadratic' ~ -n,
+                          .default = n),
+    count_dir = ifelse(dir_count > 0, 'pos', 'neg'),
+    ds_mode = case_when(
+               ds == 'YCD' ~ ds,
+    #            paste0(ds, mode),
+    #            ds == 'X + Y' ~ 'XDS + YDS',
+               .default = paste0(ds, ' ', profile)
+               ),
+    short_tag = ordered(short_tag, levels = c('PAR', 'Y_link', 'X_link'))
+  ) %>% 
+  group_by(ds_mode, count_dir) %>%
+  mutate(ds_count = sum(n)) %>%
+ # dplyr::filter(ds_profile != 'YCD + XCD linear opposite') %>%
+  dplyr::filter(ds_mode != 'YCD + XCD quadratic') %>% 
+  group_by(ds_mode) %>%
+  arrange(short_tag) %>%
+  mutate(cond_count = ifelse(row_number() == n(), ds_count, NA)) 
+
+```
+
+
+```{r sexchr dirplot}
+
+pdf('aut_dirsv2.pdf')
+#aut_dirsv2_plot <-
+aut_dirsv2 %>% #dplyr::filter(ds_profile != 'XCD quadratic') %>%
+ggplot(aes(dir_count, ds_mode)) +
+  geom_col(fill = chr_tag_val['Autosome']) +
+  geom_text(aes(label = cond_count), 
+           data = aut_dirsv2[aut_dirsv2$count_dir == 'pos' & (aut_dirsv2$ds_mode != 'YDS' & aut_dirsv2$ds_mode != 'YDS + XDS linear'), ],
+           position = position_nudge(x = 35) ) +
+  geom_text(aes(label = cond_count), 
+            data = aut_dirsv2[aut_dirsv2$count_dir == 'pos' & (aut_dirsv2$ds_mode == 'YDS' | aut_dirsv2$ds_mode == 'YDS + XDS linear'), ],
+            position = position_nudge(x = 700)) +
+  geom_text(aes(label = cond_count), data = aut_dirsv2[aut_dirsv2$count_dir == 'neg',], position = position_nudge(x = -35) ) +
+  geom_vline(xintercept = 0, linetype = 1, alpha = 0.7) +
+  #xlim(-800, 800) +
+  scale_y_discrete(limits = c( 'YCD + XCD linear', 'YCD', 'XCD linear'),
+                   labels = c( 'YCD & XCD\nlinear', 'YCD\nlinear', 'XCD\nlinear')) +
+scale_x_continuous(expand = expansion(mult = c(0.07, 0.06))) +
+  annotate(geom = 'text', label = 'negative', x = -150, y = 3.7) +
+  annotate(geom = 'text', label = 'positive', x = 150, y = 3.7) +
+  annotate(geom = 'text', label = '', x = 50, y = 3.8) +
+  theme_classic() +
+ # guides(fill = c())
+  labs(
+    x = 'Number of SCD sensitive autosomes',
+    y = 'Type of SCD effect'
+  )
+
+  
+  dev.off()
+```
+
+
+
+
+
+
+######new panel 5 ###### integrated 2d view
+
+
+```{r}
+# clean only 3 biotypes version and id present in current annotations (gencode 50)
+
+all2to1_clean <- 
+  all2to1 |>
+    mutate(ENSG_id = str_extract(item, '^[^.-]+')) |>
+    left_join(gen50_ensg, by = 'ENSG_id') |>
+    mutate(
+      shortbio = case_when(
+        gene_type == 'protein_coding' ~  'protein-coding',
+        gene_type == 'lncRNA' ~  'lncRNA',
+        str_detect(gene_type, 'pseudo') ~ 'pseudogene',
+        .default = 'other')
+    )|>
+    dplyr::filter(shortbio != 'other') 
+
+aut_orth <- 
+  all2to1_clean |>
+  dplyr::filter(chr_tag == 'Autosome') |>
+  mutate(is_SCD = case_when(ENSG_id %in% aut_patterns$ENSG_id ~ 'SCD sensitive', TRUE ~ 'not SCDs'),
+         simmetry_orth =  rowMeans(cbind(XCDlfc, YCDlfc)),
+         asymm_orth = (XCDlfc  - YCDlfc)/sqrt(2)
+         ) |>
+  left_join(aut_patterns |> dplyr::select(ENSG_id, ds), by = 'ENSG_id') |>
+  replace_na(list(ds ='not SCDs')) 
+```
+
+
+
+
+
+
+```{r}
+asym_rank <- 
+  aut_orth |>
+  dplyr::filter(is.finite(asymm_orth), !is.na(ENSG_id)) |>
+  arrange(desc(asymm_orth)) |>
+  pull(asymm_orth, name = 'ENSG_id')
+
+symmetry_rank <- 
+  aut_orth |>
+  dplyr::filter(is.finite(simmetry_orth), !is.na(ENSG_id)) |>
+  arrange(desc(simmetry_orth)) |>
+  pull(simmetry_orth, name = 'ENSG_id')
+  
+```
+
+
+
+```{r, eval=FALSE}
+list(
+pat = aut_patterns$gene_symbol,
+clean = all2to1_clean$gene_symbol) |>
+ggVennDiagram(show_intersect = TRUE) # 19 genes with no matching ensg50 annotation
+```
+
+
+
+```{r 5A prep}
+### SCD sensitive autosomes in 2d
+scdaut_orth <- 
+  aut_orth |>
+  dplyr::filter(is_SCD == 'SCD sensitive')
+
+scdaut_2to1_spearman <- 
+  scdaut_orth  %>%
+    cor_test(vars = c(XCDlfc, YCDlfc), method = 'spearman' )
+
+# add slope by calculating PC1
+
+scdaut_lfc <- 
+  scdaut_orth %>% column_to_rownames('ENSG_id') %>% dplyr::select(XCDlfc, YCDlfc) %>% as.matrix()
+
+# Run PCA on the log2FC matrix (scale = FALSE preserves log scale)
+scdaut_pc <- prcomp(scdaut_lfc) #default center = TRUE,  scale. = FALSE
+scdaut_orth$pc1 <- scdaut_pc$x[,'PC1']
+scdaut_orth$pc2 <- scdaut_pc$x[,'PC2']
+slope <- scdaut_pc$rotation[2,1] / scdaut_pc$rotation[1,1]
+intercept = scdaut_pc$center[2] - slope * scdaut_pc$center[1]
+
+slope_test5A <- smatr::sma(YCDlfc ~ XCDlfc, data = scdaut_orth, slope.test = 1, method = "MA")
+slope_test5A |> summary()
+```
+
+
+```{r 5A}
+#| fig-height: 4
+#| fig-width: 4
+
+pdf('scdaut2to1_plot.pdf', height = 4, width = 4)
+#scdaut2to1_plot <- 
+scdaut_orth |>
+  dplyr::mutate(
+    cond_label = case_when((
+      XCDlfc <= -1 | XCDlfc > 1.3 | YCDlfc <= -1 | YCDlfc > 1.3) & !str_starts(gene_name, 'ENSG') ~ gene_name,
+      .default = NULL)) |>
+ ggplot(aes(XCDlfc, YCDlfc)) +
+  geom_abline(lty = 3, color = 'grey20')  +
+  geom_abline(slope = slope, intercept = intercept, colour = 'lightblue3' ) +
+ # geom_smooth(aes(y = pc2)) + # nope
+ # geom_smooth(method = 'lm') +
+ # geom_smooth(aes(y = pc2), method = "lm", se = FALSE, alpha = 0.5) +
+  geom_point(aes(shape = ds), fill = chr_tag_val['Autosome'], alpha = 0.5, stroke = rel(0.2)) + #, alpha = is_SCD
+  geom_text_repel(aes(label = cond_label), segment.alpha = 0.5, segment.colour = 'grey50', alpha = 0.85, size = 4, max.overlaps = 8) +
+  scale_shape_manual(values = c(XCD = 21, YCD = 24, 'YCD + XCD' = 22 )) +
+#  scale_alpha_manual(values = c('SCD sensitive' = 0.5, 'not SCDs' = 0.15)) +
+  annotate(geom = 'text', x = 2, y = -2, label = paste0(expression('italic(r)[s]=='), round(scdaut_2to1_spearman$cor,2)), parse = TRUE, size = 3.7, color = 'grey45') +
+  annotate(geom = 'text', x = 2, y = -2.3, label = expression(italic(p) < 0.00001),  size = 3.7, color = 'grey45') +
+  coord_cartesian(xlim = c(-3.3,3.3), ylim = c(-3.3,3.3) ) +
+  theme_bw() +
+  theme(
+    legend.position = 'inside', legend.position.inside = c(0.2, 0.8),
+    legend.background = element_rect(colour = 'grey60', linewidth = 0.2)
+    ) +
+  labs( x = expression(log2FC[XCD2]),
+        y = expression(log2FC[YCD2]),
+        shape = 'SCD profile')
+dev.off()
+```
+
+
+
+
+
+```{r}
+GO_avg <- 
+fgsea(
+  pathways = path_list$GO_name, 
+  stats = symmetry_rank, 
+  gseaParam = 1, # default
+  minSize = 3,
+  maxSize = 500
+)
+
+avgGO_sig <- 
+  GO_avg |>
+  dplyr::filter(padj < 0.05) |>
+  mutate(
+    path = str_remove(pathway, '^[^_]+'),
+    path = str_replace_all(path, '_', ' '),
+    source = str_extract(pathway, '^[^_]+'),
+    source = str_remove_all(source, '_'),
+    path = str_remove_all(path, 'REGULATION OF ')
+  )
+```
+
+```{r}
+avgGO_sig 
+```
+
+
+######## asymetry orthogonal over autosomes
+
+
+```{r}
+aut_asym_go <-
+fgsea(
+  pathways = path_list$GO_name, 
+  stats = asym_rank, 
+  gseaParam = 1, # default
+  minSize = 3,
+  maxSize = 500
+)
+
+aut_asym_go_sig <- 
+  aut_asym_go |>
+  dplyr::filter(padj < 0.05) |>
+  mutate(
+    path = str_remove(pathway, '^[^_]+'),
+    path = str_replace_all(path, '_', ' '),
+    source = str_extract(pathway, '^[^_]+'),
+    source = str_remove_all(source, '_')
+  )
+```
+
+
+##### all orth plots symm and asym 
+
+```{r}
+#calculate full range for ploting
+autorth_padj_range <-
+  range(avgGO_sig$padj, aut_asym_go_sig$padj)
+  
+autorth_NES_range  <- 
+  range(avgGO_sig$NES, -1*avgGO_sig$NES, aut_asym_go_sig$NES, -1*aut_asym_go_sig$NES)
+  
+autorth_size_range  <- 
+    range(avgGO_sig$size, aut_asym_go_sig$size)
+```
+```{r}
+-log10(autorth_padj_range ) #4.866174 1.339285
+expanded_padj_range <- c(5,1.3)
+```
+
+
+```{r}
+avgGO__plots <- 
+avgGO_sig |>
+  split(~source) |>
+  lapply(function(x){ x |>
+    slice_min(padj, n =15) |>
+#  dplyr::filter(padj < 0.01) |>
+    ggplot(aes(NES, fct_reorder(path, NES))) +
+    geom_col(aes(fill =  -log10(padj)), width = 0.2, , colour = 'grey', linewidth = 0.25) +
+    geom_point(aes(size = size, fill = -log10(padj)), shape = 21, , colour = 'grey') +
+    scale_x_continuous(limits = autorth_NES_range, 
+                       sec.axis = sec_axis(~., name = expression(SCD[2]~negative~~~~~~~~SCD[2]~positive))) +
+    scale_fill_bilbao(limits = expanded_padj_range) +
+ #   scale_color_bilbao(limits = range(-log10(position_sig$pval))) +
+    scale_size_continuous(limits = autorth_size_range) +
+    #labs(y = '',
+      #   title = x$source) +
+    theme_bw()  +
+    facet_wrap(~source, scales = 'free_y', ncol = 2) +
+      theme(axis.text.y = element_text(size = 5.8))
+   # theme(plot.title = element_text(hjust = -1))
+  }) 
+```
+
+```{r 5B}
+
+avgGO__plots$GOBP +
+ avgGO__plots$GOCC + 
+  plot_layout(ncol = 1, 
+              heights = c(16,1),
+              axes = 'collect', axis_titles = 'collect', guides = 'collect')
+
+```
+
+
+```{r}
+
+aut_asym_go_plots <- 
+aut_asym_go_sig |>
+  split(~source) |>
+  lapply(function(x){ x |>
+    slice_min(padj, n =25) |>
+#  dplyr::filter(padj < 0.01) |>
+    ggplot(aes(NES, fct_reorder(path, NES))) +
+    geom_col(aes(fill =  -log10(padj)), width = 0.2, colour = 'grey', linewidth = 0.25) +
+    geom_point(aes(size = size, fill = -log10(padj)), shape = 21, colour = 'grey') +
+    scale_x_continuous(limits = autorth_NES_range, 
+                       sec.axis = sec_axis(~., name = expression(YCD[2]~bias~~~~~~~~XCD[2]~bias))) +
+    scale_fill_bilbao(limits = expanded_padj_range) +
+ #   scale_color_bilbao(limits = range(-log10(position_sig$pval))) +
+    scale_size_continuous(limits = autorth_size_range) +
+    #labs(y = '',
+      #   title = x$source) +
+    theme_bw()  +
+    facet_wrap(~source, scales = 'free_y', ncol = 2) +
+      theme(axis.text.y = element_text(size = 5.8))
+   # theme(plot.title = element_text(hjust = -1))
+  }) 
+```
+
+```{r}
+#| fig-height: 4
+#| fig-width: 6
+#| 
+pdf('go2.pdf')
+
+aut_asym_go_plots$GOBP +
+  aut_asym_go_plots$GOCC +
+  plot_layout(ncol = 1, axis_titles = 'collect', guides = 'collect', axes = 'collect')
+
+dev.off()
+```
+```{r}
+#| fig-height: 5
+#| fig-width: 10
+pdf('testorth.pdf', width = 10, height = 5)
+wrap_elements(
+  avgGO__plots$GOBP + labs(y =NULL) +
+  avgGO__plots$GOCC + labs(y =NULL) +
+  plot_layout(ncol = 1, 
+              heights = c(16,1),
+              axes = 'collect', axis_titles = 'collect', guides = 'collect') &
+  theme(legend.position = 'none', 
+        axis.text.y = element_text(size = rel(1.1), angle = 0)
+       )
+  ) + labs(tag = 'b') +
+wrap_elements(
+  aut_asym_go_plots$GOBP + labs(y =NULL) +
+  aut_asym_go_plots$GOCC + labs(y =NULL) +
+  plot_layout(ncol = 1, 
+              heights = c(11,6),
+              axis_titles = 'collect', guides = 'collect', axes = 'collect') &
+  theme(legend.position = 'none', axis.text.y = element_text(size = rel(1.1), angle = 0))
+  ) + labs(tag = 'c') +
+orth_legend + theme(legend.direction =  'horizontal') + theme(plot.tag = element_blank()) +
+
+plot_layout(
+  design = '12
+            33',
+  heights = c(4,0.5)
+  ) & 
+  theme(plot.tag = element_text(face = 'bold'))
+
+dev.off()
+```
+```{r}
+7 * 8
+
+```
+
+```{r}
+#| fig-height: 2
+#| fig-width: 5
+
+#pdf('otro.pdf', width = 5, height = 2.5)
+
+update_geom_defaults("text_repel", list(size = 50)) 
+scdaut2to1_plot
+
+#dev.off()
+```
+
+
+```{r panel5, warning=FALSE}
+#| fig-height: 20
+#| fig-width: 11
+
+#pdf('last_fig2.pdf', height = 20, width = 11)
+
+orth_legend <- 
+  cowplot::get_legend(avgGO__plots$GOBP +theme(legend.position = 'bottom', legend.direction =  'horizontal'))
+
+scdaut2to1_plot + 
+  #theme(legend.position = 'inside', legend.position.inside = c(0.8,0.2)) + 
+  labs(tag = 'A') +
+wrap_elements(
+  avgGO__plots$GOBP + labs(y =NULL) +
+  avgGO__plots$GOCC + labs(y =NULL) +
+  plot_layout(ncol = 1, 
+              heights = c(16,1),
+              axes = 'collect', axis_titles = 'collect', guides = 'collect') &
+  theme(legend.position = 'none', 
+        axis.text.y = element_text(size = rel(1.1), angle = 0)
+       )
+  ) + labs(tag = 'B') +
+wrap_elements(
+  aut_asym_go_plots$GOBP + labs(y =NULL) +
+  aut_asym_go_plots$GOCC + labs(y =NULL) +
+  plot_layout(ncol = 1, 
+              heights = c(11,6),
+              axis_titles = 'collect', guides = 'collect', axes = 'collect') &
+  theme(legend.position = 'none', axis.text.y = element_text(size = rel(1.1), angle = 0))
+  ) + labs(tag = 'C') +
+orth_legend + theme(legend.direction =  'horizontal') + theme(plot.tag = element_blank()) +
+
+plot_layout(
+  design = '11
+            23
+            44',
+  heights = c(4,4,0.5)
+  ) & 
+  theme(plot.tag = element_text(face = 'bold'))
+
+#dev.off()
+```
+```{r, warning=FALSE}
+#| fig-height: 10
+#| fig-width: 16
+#alt viz
+
+orth_legend <- 
+  cowplot::get_legend(avgGO__plots$GOBP +theme(legend.position = 'bottom', legend.direction =  'horizontal'))
+
+scdaut2to1_plot + 
+  #theme(legend.position = 'inside', legend.position.inside = c(0.8,0.2)) + 
+  labs(tag = 'a') +
+wrap_elements(
+  avgGO__plots$GOBP + labs(y =NULL) +
+  avgGO__plots$GOCC + labs(y =NULL) +
+  plot_layout(ncol = 1, 
+              heights = c(16,1),
+              axes = 'collect', axis_titles = 'collect', guides = 'collect') &
+  theme(legend.position = 'none', 
+        axis.text.y = element_text(size = rel(1.3), angle = 45)
+       )
+  ) + labs(tag = 'b') +
+wrap_elements(
+  aut_asym_go_plots$GOBP + labs(y =NULL) +
+  aut_asym_go_plots$GOCC + labs(y =NULL) +
+  plot_layout(ncol = 1, 
+              heights = c(11,6),
+              axis_titles = 'collect', guides = 'collect', axes = 'collect') &
+  theme(legend.position = 'none', axis.text.y = element_text(size = rel(1.3), angle = 36))
+  ) + labs(tag = 'c') +
+orth_legend + theme(legend.direction =  'horizontal') + theme(plot.tag = element_blank()) +
+
+plot_layout(
+  design = '123
+            423',
+  heights = c(4,0.5)
+  ) & 
+  theme(plot.tag = element_text(face = 'bold'))
+```
+
+
+```{r}
+#| fig-height: 3
+#| fig-width: 3
+scdaut2to1_plot
+```
+
+
+######## testing when including sex chromosomes on the rank
+```{r}
+all_orth <- 
+  all2to1_clean |>
+  left_join(
+    bind_rows(aut_patterns, sexchr_patterns) |> dplyr::select(ENSG_id, ds), by = 'ENSG_id') |>
+  replace_na(list(ds ='not SCDs')) |>
+  mutate(is_SCD = case_when(ds == 'not SCDs' ~ 'not SCDs', TRUE ~  'SCD sensitive'),
+         simmetry_orth =  rowMeans(cbind(XCDlfc, YCDlfc)),
+         asymm_orth = (XCDlfc  - YCDlfc)/sqrt(2)
+         ) 
+```
+
+
+
+```{r}
+all_asym_rank <- 
+  all_orth |>
+  dplyr::filter(is.finite(asymm_orth), !is.na(ENSG_id)) |>
+  arrange(desc(asymm_orth)) |>
+  pull(asymm_orth, name = 'ENSG_id')
+
+all_symmetry_rank <- 
+  all_orth |>
+  dplyr::filter(is.finite(simmetry_orth), !is.na(ENSG_id)) |>
+  arrange(desc(simmetry_orth)) |>
+  pull(simmetry_orth, name = 'ENSG_id')
+  
+```
+
+
+
+```{r}
+all_sym_go <-
+fgsea(
+  pathways = path_list$GO_name, 
+  stats = all_symmetry_rank, 
+  gseaParam = 1, # default
+  minSize = 3,
+  maxSize = 500
+)
+
+all_sym_go_sig <- 
+  all_sym_go |>
+  dplyr::filter(padj < 0.05) |>
+  mutate(
+    path = str_remove(pathway, '^[^_]+'),
+    path = str_replace_all(path, '_', ' '),
+    source = str_extract(pathway, '^[^_]+'),
+    source = str_remove_all(source, '_')
+  )
+```
+
+```{r}
+#all_sym_plots <- 
+all_sym_go_sig |>
+  split(~source) |>
+  lapply(function(x){ x |>
+    slice_min(padj, n =25) |>
+#  dplyr::filter(padj < 0.01) |>
+    ggplot(aes(NES, fct_reorder(path, NES))) +
+    geom_col(aes(fill =  -log10(padj)), width = 0.2) +
+    geom_point(aes(size = size, fill = -log10(padj)), shape = 21) +
+    scale_x_continuous(limits = range(all_sym_go_sig$NES, -1* all_sym_go_sig$NES), 
+                       sec.axis = sec_axis(~., name = expression(SCD[2]~negative~~~~~~~~SCD[2]~positive))) +
+    scale_fill_bilbao(limits = range(-log10(all_sym_go_sig$padj))) +
+ #   scale_color_bilbao(limits = range(-log10(position_sig$pval))) +
+    scale_size_continuous(limits = range(all_sym_go_sig$size)) +
+    #labs(y = '',
+      #   title = x$source) +
+    theme_bw()  +
+    facet_wrap(~source, scales = 'free_y', ncol = 2) +
+      theme(axis.text.y = element_text(size = 5.8))
+   # theme(plot.title = element_text(hjust = -1))
+  }) 
+```
+
+```{r}
+all_asym_go <-
+fgsea(
+  pathways = path_list$GO_name, 
+  stats = all_asym_rank, 
+  gseaParam = 1, # default
+  minSize = 3,
+  maxSize = 500
+)
+
+all_asym_go_sig <- 
+  all_asym_go |>
+  dplyr::filter(padj < 0.05) |>
+  mutate(
+    path = str_remove(pathway, '^[^_]+'),
+    path = str_replace_all(path, '_', ' '),
+    source = str_extract(pathway, '^[^_]+'),
+    source = str_remove_all(source, '_')
+  )
+```
+
+```{r}
+all_asym_go_sig |>
+  split(~source) |>
+  lapply(function(x){ x |>
+    slice_min(padj, n =25) |>
+#  dplyr::filter(padj < 0.01) |>
+    ggplot(aes(NES, fct_reorder(path, NES))) +
+    geom_col(aes(fill =  -log10(padj)), width = 0.2) +
+    geom_point(aes(size = size, fill = -log10(padj)), shape = 21) +
+    scale_x_continuous(limits = range(all_asym_go_sig$NES, -1*all_asym_go_sig$NES), 
+                       sec.axis = sec_axis(~., name = expression(YCD[2]~bias~~~~~~~~XCD[2]~bias))) +
+    scale_fill_bilbao(limits = range(-log10(all_asym_go_sig$padj))) +
+ #   scale_color_bilbao(limits = range(-log10(position_sig$pval))) +
+    scale_size_continuous(limits = range(all_asym_go_sig$size)) +
+    #labs(y = '',
+      #   title = x$source) +
+    theme_bw()  +
+    facet_wrap(~source, scales = 'free_y', ncol = 2) +
+      theme(axis.text.y = element_text(size = 5.8))
+   # theme(plot.title = element_text(hjust = -1))
+  }) 
+```
+
+############double checking some stats #########
+
+
+ Enrichment on sex chromosomes as a whole: Odds Ratio (OR) = 5.9, p = 4.06e-60; X-chromosome OR = 4.4, p = 3.64e-34; Y-chromosome OR = 48.1, p = 1.84e-24; PAR OR = 92, p = 2.66e-26)
+```{r}
+hg38_clean50$hg38XCDL_mm |>
+   left_join(
+      bind_rows(aut_patterns_clean,sexchr_patterns_clean) |> 
+      dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  mutate(isSCD = if_else(is.na(ds_profile), 'not SCD', 'SCD'),
+         short_tag = if_else(str_detect(chr_tag, 'PAR'), 'PAR', chr_tag)) |>
+  summarize(.by = c(isSCD, short_tag), n = n()) |>
+  pivot_wider(names_from = isSCD, values_from = n) |>
+  column_to_rownames('short_tag') |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+
+```{r}
+# what's the enrichment of only negative
+hg38_clean50$hg38XCDL_mm |>
+   left_join(
+      bind_rows(aut_patterns_clean,sexchr_patterns_clean) |> 
+      dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  dplyr::filter(str_detect(ds_profile, 'negative') | is.na(ds_profile)) |> 
+  mutate(isSCD = if_else(is.na(ds_profile), 'not SCD', 'SCD'),
+         short_tag = if_else(str_detect(chr_tag, 'PAR'), 'PAR', chr_tag)) |>
+  summarize(.by = c(isSCD, short_tag), n = n()) |>
+  pivot_wider(names_from = isSCD, values_from = n) |>
+  replace_na(list(SCD = 0)) |> 
+  column_to_rownames('short_tag') |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+
+Biotype analysis revealed that autosomaly located SCD sensitive genes tended to be protein-coding (OR = 1.9, p = 2.89e-14) and those on the sex chromosomes were disproportionately non-coding (lncRNA enrichment OR = 1.8, p =   0.0117). 
+
+
+```{r}
+#new test oct 9
+bio_chrtag_oct <-
+hg38_clean50$hg38XCDL_mm |>
+   left_join(
+      bind_rows(aut_patterns_clean,sexchr_patterns_clean) |> 
+      dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  mutate(isSCD = if_else(is.na(ds_profile), 'not SCD', 'SCD')) |>
+  summarize(.by = c(isSCD, chr_tag, short_bio), n = n() )
+```
+
+
+
+
+
+
+```{r}
+bio_chrtag_oct |>
+  summarise(.by = isSCD, sum = sum(n))
+#yey
+#SCD	1017			
+#not SCD	21831	
+```
+
+#### sex statement was based in p and do not survive p adjusted, so retry binarized
+protein coding is enruched in both cases. lnc have a marginal padj (0.052)but a significant of 0.04 when binarized
+
+```{r}
+bio_chrtag_oct |>
+  dplyr::filter(chr_tag != 'Autosome') |>
+  mutate(bin_bio = ifelse(short_bio == 'protein-coding', 'coding', 'non-coding')) |>
+  summarise(.by = c(isSCD, bin_bio), sum = sum(n)) |>
+   pivot_wider(names_from = isSCD, values_from = sum) |>
+  column_to_rownames('bin_bio') |>
+    row_wise_fisher_test(detailed = TRUE)
+
+#non coding: OR 1.5902897	 // p 	0.04010783	*=
+```
+
+
+
+
+```{r}
+bio_chrtag_oct |>
+  dplyr::filter(chr_tag == 'Autosome') |>
+  mutate(bin_bio = ifelse(short_bio == 'protein-coding', 'coding', 'non-coding')) |>
+  summarise(.by = c(isSCD, bin_bio), sum = sum(n)) |>
+   pivot_wider(names_from = isSCD, values_from = sum) |>
+  column_to_rownames('bin_bio') |>
+    row_wise_fisher_test(detailed = TRUE)
+```
+
+
+
+```{r}
+bio_chrtag_oct |>
+  dplyr::filter(chr_tag == 'Autosome') |>
+  pivot_wider(names_from = isSCD, values_from = n) |>
+  dplyr::select(-chr_tag) |>
+  column_to_rownames('short_bio') |>
+  row_wise_fisher_test(detailed = TRUE)
+#protein-coding	22014	1.9103984	2.918421e-14	  
+```
+
+```{r}
+bio_chrtag_oct |>
+  dplyr::filter(chr_tag != 'Autosome') |>
+  dplyr::select(-chr_tag) |>
+  summarise(.by = c(short_bio, isSCD), n = sum(n, na.rm = TRUE)) |>
+  pivot_wider(names_from = isSCD, values_from = n) |>
+  column_to_rownames('short_bio') |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+
+
+```{r, eval=FALSE}
+bio_chrtag_oct |>
+  dplyr::filter(chr_tag != 'Autosome') |>
+  summarise(.by = c(short_bio, isSCD), n = sum(n, na.rm = TRUE)) |>
+  pivot_wider(names_from = isSCD, values_from = n) |>
+  column_to_rownames('short_bio') |>
+  row_wise_fisher_test(detailed = TRUE)
+#	lncRNA	847	1.7439519	0.01232127	1.1075686	2.7076299	Fisher's Exact test
+```
+
+
+
+comment on autosomes:
+Would be good to say here if this N means the 12 X-linked genes with negative YCD effect on expression constitutes an enrichment. I think it does as 12% of the -ve Y effects are on X, but only 5% of genes in genome. This is important to report here, because if means the trans effects of Y on X we find above are not just part of a generic trans effects, but more like targetted cross-regulation from one sex chromosome to another
+
+#### for YCD ( al negative YCD, included the X + Y)
+
+```{r}
+
+hg38_clean50$hg38XCDL_mm |>
+   left_join(
+      bind_rows(aut_patterns_clean,sexchr_patterns_clean) |> 
+      dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  mutate(isYCDneg = if_else(
+    ds_profile == 'YCD linear negative' | 
+    ds_profile == 'YCD + XCD linear negative', 
+    'yes', 'no', missing = 'no')) |>
+  summarize(.by = c(isYCDneg, chr_tag), n = n()) |>
+  pivot_wider(names_from = isYCDneg, values_from = n) |>
+  replace_na(list(yes = 0))  |>
+ # dplyr::filter(chr_tag == 'X_link' | chr_tag == 'Autosome') |>
+  column_to_rownames('chr_tag') |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+```{r}
+### otro testing agains all 'no'
+data.frame(
+  x_link = c('YCDneg' = 12, 'no' = 772-12),
+  aut = c('YCDneg' = 124, 'no' = 22014-124)
+) |>
+  t() |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+
+```{r}
+#YCD + XCD
+data.frame(
+  x_link = c('allneg' = 22, 'no' = 772-24),
+  aut = c('Yallneg' = 124 + 226, 'no' = 22014-124-226)
+) |>
+  t() |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+```{r}
+hg38_clean50$hg38XCDL_mm |>
+   left_join(
+      bind_rows(aut_patterns_clean,sexchr_patterns_clean) |> 
+      dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  mutate(isXCDneg = if_else(
+    ds_profile == 'XCD linear negative', 
+    'yes', 'no', missing = 'no')) |>
+  summarize(.by = c(isXCDneg, chr_tag), n = n()) |>
+  pivot_wider(names_from = isXCDneg, values_from = n) |>
+  replace_na(list(yes = 0))  |>
+ # dplyr::filter(chr_tag == 'X_link' | chr_tag == 'Autosome') |>
+  column_to_rownames('chr_tag') |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+
+
+```{r}
+#otro test XCD alone
+data.frame(
+  x_link = c('XCDneg' = 10, 'no' = 772-10),
+  aut = c('Yallneg' = 226, 'no' = 22014-226)
+) |>
+  t() |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+
+### adn for al negative SCDs
+
+```{r}
+chr_dir <-
+hg38_clean50$hg38XCDL_mm |>
+   left_join(
+      bind_rows(aut_patterns_clean,sexchr_patterns_clean) |> 
+      dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  mutate(isSCD = if_else(is.na(ds_profile), 'not SCD', 'SCD'),
+         dir = case_when(
+           str_detect(ds_profile, 'negative') ~ 'neg', 
+           str_detect(ds_profile, 'positive') ~ 'pos',
+           str_detect(ds_profile, 'quad') ~ 'pos',
+           is.na(ds_profile) ~ 'not',
+           TRUE ~ 'plop'
+           ),
+         ) |>
+  summarize(.by = c(isSCD, chr_tag, short_bio, dir), n = n() )
+```
+
+# true for all negative / OR 2.027 p adj 0.006 for all -ve
+
+
+
+```{r}
+chr_dir |>
+  dplyr::filter(dir != 'pos' & (chr_tag == 'Autosome' | chr_tag == 'X_link')) |>
+  summarise(.by = c(chr_tag, isSCD), sum = sum(n)) |>
+  pivot_wider(names_from = isSCD, values_from = sum) |>
+  column_to_rownames('chr_tag') |>
+    row_wise_fisher_test(detailed = TRUE)
+```
+
+##and negative XCD only
+```{r}
+hg38_clean50$hg38XCDL_mm |>
+   left_join(
+      bind_rows(aut_patterns_clean,sexchr_patterns_clean) |> 
+      dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  mutate(isYCDneg = if_else(
+    ds_profile == 'XCD linear negative',
+    'yes', 'no', missing = 'no')) |>
+  summarize(.by = c(isYCDneg, chr_tag), n = n()) |>
+  pivot_wider(names_from = isYCDneg, values_from = n) |>
+ # replace_na(list(yes = 0))  |>
+  dplyr::filter(chr_tag == 'X_link' | chr_tag == 'Autosome') |>
+  column_to_rownames('chr_tag') |>
+  row_wise_fisher_test(detailed = TRUE)
+```
+
+```{r}
+biotype_chrtag <- 
+all2to1_clean |>
+  left_join(
+    bind_rows(aut_patterns,sexchr_patterns) |> dplyr::select(ENSG_id, ds_profile),
+    by = 'ENSG_id'
+  ) |>
+  mutate(isSCD = if_else(is.na(ds_profile), 'not SCD', 'SCD')) |>
+  summarize(.by = c(isSCD, chr_tag, shortbio), n = n() )
+
+```
+
+```{r}
+biotype_chrtag |>
+  dplyr::filter(chr_tag == 'Autosome') |>
+  pivot_wider(names_from = isSCD, values_from = n) |>
+  dplyr::select(-chr_tag) |>
+  column_to_rownames('shortbio') |>
+  row_wise_fisher_test(detailed = TRUE)
+#protein-coding	22014	1.9103984	2.918421e-14	  
+```
+```{r}
+biotype_chrtag |>
+  dplyr::filter(chr_tag != 'Autosome') |>
+  summarise(.by = c(shortbio, isSCD), n = sum(n, na.rm = TRUE)) |>
+  pivot_wider(names_from = isSCD, values_from = n) |>
+  column_to_rownames('shortbio') |>
+  row_wise_fisher_test(detailed = TRUE)
+#	lncRNA	847	1.7439519	0.01232127	1.1075686	2.7076299	Fisher's Exact test
+```
+
+
+
+
+
+
+#Comparing quadratci vs linear log2FC and PI -score
+#assumptionsd: different sized (15 vs 100~),normal, unequal variances
+for log2FC: recomended is Wekchs's test (since values are already trnasformed)
+```{r}
+lq |> #mutate(profile= factor(profile, levels = c('quadratic', 'linear'))) |> 
+t_test(logFC_1to3 ~ profile, ref.group = 'quadratic', detailed = TRUE) # default is variance equal = FALSE, what makes this a t-welch test
+
+lq |>
+ wilcox_test(logFC_1to3 ~ profile, ref.group = 'quadratic', detailed = TRUE)
+```
+
+for PI score: are non-normal, squewedunequal variances: brunener-munzel (is varainces are equal counl be used Mann-Whitney U test). 
+
+```{r}
+
+
+
+
+
+  lawstat::brunner.munzel.test(lq$pi_1to3, lq$profile)
+#   wilcox_test(pi_1to3 ~ profile, ref.group = 'quadratic', detailed = TRUE)
+#t_test(pi_1to3 ~ profile, ref.group = 'quadratic', detailed = TRUE) 
+```
+
+```{r}
+#higher positive than negative effects
+
+lq |> #mutate(profile= factor(profile, levels = c('quadratic', 'linear'))) |> 
+t_test(logFC_1to3 ~ dir, ref.group = 'positive', detailed = TRUE, alternative = "greater") 
+```
+
+Positive YCD effects on expression of sex chromosome genes were substantially greater in their magnitude and statistical significance than negative YCD effects (stats, Fig. 3G). 
+
+```{r}
+y_1to2 |>
+t_test(logFC ~ dir, ref.group = 'positive', detailed = TRUE, alternative = "greater") 
+```
+
+```{r table1}
+
+colData(uneroded_se)|>
+  as.data.frame() |>
+  summarise(.by = c(HT_id, karyotype), n = n()) |>
+  pivot_wider(names_from = HT_id, values_from = n) %>%
+  column_to_rownames('karyotype') %>%
+  mutate(N = rowSums(., na.rm = TRUE),
+         n = rowSums(!is.na(.)),
+         .keep = 'none'
+         )
+
+```
+
+```{r}
+1.65^08
+```
+```{r}
+cosa <- read_rds('../SDN_Multiomic/orth_c_dds.rds')
+```
+
+```{r}
+cosa |> colData() |>
+  as.data.frame() |>
+  summarise(.by = c(HT_id, Dx.x), n = n()) |>
+  pivot_wider(names_from = HT_id, values_from = n) %>%
+  column_to_rownames('Dx.x') %>%
+  mutate(N = rowSums(., na.rm = TRUE),
+         n = rowSums(!is.na(.)),
+         .keep = 'none'
+         )
+```
+
+```{r}
+98/857
+
+```
+
+```{r}
+aut_patterns |>
+  left_join(gen50_ensg, by = 'ENSG_id') |> 
+  dplyr::filter(
+    (gene_type == 'protein_coding' |
+     gene_type == 'lncRNA' |
+      str_detect(gene_type, 'pseudo')) &
+      ds == 'YCD + XCD'
+  ) # 98
+ # summarise(.by = gene_type, bio = n())
+```
+
+```{r}
+aut_patterns |>
+  left_join(gen50_ensg, by = 'ENSG_id') |> 
+  dplyr::filter(
+    gene_type == 'protein_coding' |
+     gene_type == 'lncRNA' |
+      str_detect(gene_type, 'pseudo')) |>
+  summarise(.by = ds_profile, n = n())
+```
+
+ Does the difference between log2FCYCD2 & log2FCXCD2 across gene pairs covary with the coding or regulatory sequence divergence (or other pair-level divergence metrics that Alex quantified in her gametolog paper?.
+ 
+```{r}
+gam_dissimilarity <-
+  openxlsx2::read_xlsx('Decasien_gametologs_41559_2024_2627_MOESM3_ESM (1).xlsx', sheet = 'Table S5', start_row = 3, skip_empty_cols = TRUE)
+
+gam_withinpairCFD <-
+    openxlsx2::read_xlsx('Decasien_gametologs_41559_2024_2627_MOESM3_ESM (1).xlsx', sheet = 'Table S2', start_row = 4, skip_empty_cols = TRUE, col_names = TRUE) |> dplyr::select(contains('Tissue') | contains('pair') |contains('[XM–YM]'))
+
+
+```
+ 
+# aCFD and sCFD avg across tissues
+```{r}
+
+CFD_by_pair <- 
+gam_withinpairCFD |>
+  summarize(.by = `Gametologue Pair`,
+            'mean_aCFD[XM_YM]' = mean(as.numeric(`aCFD[XM–YM]`), na.rm = TRUE),
+            'mean_sCFD[XM_YM]' = mean(as.numeric(`sCFD[XM–YM]`), na.rm = TRUE),
+            'median_aCFD[XM_YM]' = median(as.numeric(`aCFD[XM–YM]`), na.rm = TRUE),
+            'median_sCFD[XM_YM]' = median(as.numeric(`sCFD[XM–YM]`), na.rm = TRUE)
+            )
+```
+
+
+```{r}
+full_gam <- 
+  gam_2to1 |>
+    dplyr::filter(is_deg != 'none') |>
+    mutate(delta_cis = Y_lfc - X_lfc,
+           'Gametologue pair' = if_else(str_detect(gam_pair, 'UTY'),  str_replace(gam_pair, 'UTY', 'KDM6C'), gam_pair),
+           'Gametologue pair' = str_replace_all(`Gametologue pair`, '/', ' & ')
+           )|>
+    left_join(gam_dissimilarity |> 
+                mutate('Gametologue pair' = if_else(str_detect(`Gametologue pair`, 'UTX & UTY'), 
+                                                    str_replace(`Gametologue pair`, 'UTX & UTY', 'KDM6A & KDM6C'), `Gametologue pair`)),
+                by = 'Gametologue pair') |>
+    left_join(CFD_by_pair |>
+                mutate('Gametologue pair' = ifelse(str_detect(`Gametologue Pair`, 'UTX&UTY'), 
+                                                   str_replace(`Gametologue Pair`, 'UTX&UTY', 'KDM6A & KDM6C'),
+                                                   str_replace_all(`Gametologue Pair`, '&', ' & '))),
+                by = 'Gametologue pair')  |>
+    mutate(
+      gam_short = paste0(x_gametolog, '/', str_sub(y_gametolog, -1)),
+      strata_ord = factor(`Classification 1 (from Pandey et al. 2013 Fig.1)`, levels = c("2", "3a", "3b", "4", "5", "XTR"), 
+                               ordered = TRUE), 
+      mill_years = case_when(
+             strata_ord == '2' ~ '~117',
+             str_starts(strata_ord, '3') & gam_pair != 'TBL1X/TBL1Y'~ '~116',
+             str_starts(strata_ord, '3') & gam_pair == 'TBL1X/TBL1Y'~ '~40-90',
+             str_starts(strata_ord, '4') | str_starts(strata_ord, '5') ~ '~25-40',
+             TRUE ~ 'other'   # I skipped the ones not expressed, would need to generalize this csae_when if needed
+           ),
+      avg_years = case_when(
+             strata_ord == '2' ~ 117,
+             str_starts(strata_ord, '3') & gam_pair != 'TBL1X/TBL1Y' ~ 116,
+             str_starts(strata_ord, '3') & gam_pair == 'TBL1X/TBL1Y'~ 65,
+             str_starts(strata_ord, '4') | str_starts(strata_ord, '5') ~ 32.5,
+             TRUE ~ 0   # I skipped the ones not expressed, would need to generalize this csae_when if needed
+           ),
+      strata_label = paste0(strata_ord , '\n', mill_years),
+  #    strata_label2 = expression(paste0(strata_ord, '\n', fontlayers(size = 8, mill_years)), 
+  #  parse = TRUE
+      )  
+    
+ 
+filterXTR <- 
+  full_gam |> 
+  dplyr::filter(strata_ord != 'XTR') |>
+  mutate(strata_ord = droplevels(strata_ord),
+         scale_DNA = scale(DNA, center = FALSE),
+         center_deltacis = scale(delta_cis, center = TRUE)
+         )
+
+```
+
+##### DNA sequence and strata in panel 2 ####
+
+```{r, warning=FALSE}
+#dna_dis <- 
+  filterXTR |>
+  cor_test(vars = c(center_deltacis, scale_DNA), method = 'spearman',  alternative = 'g') 
+
+# no scale: with spearman, alternative greater: cor 0.5, p = 0.07 #0.47, p = 0.1782193 #gretaer: p 0.08910966
+
+lm(filterXTR$center_deltacis ~     filterXTR$scale_DNA) |> summary() #F-statistic: 1.961 on 1 and 8 DF,  p-value: 0.199
+
+
+dna_dis_plot <- 
+filterXTR |>
+  ggplot(aes(DNA, delta_cis, label = gam_short)) +
+ # geom_abline(lty = 3) +
+    geom_smooth(method = 'lm',  fill = '#DCE6EC59', color = 'lightblue') +
+    geom_point(alpha= 0.5, size = rel(3), colour = 'purple3') +
+    geom_text_repel() + 
+    annotate(geom = 'text', x = 0.12, y = -0.1, label = paste0(expression('italic(r)[s]=='), round(dna_dis$cor,2)), parse = TRUE) +
+    annotate(geom = 'text', x = 0.12, y = -0.2, label = paste0(expression('italic(p)[s]=='), round(dna_dis$p,2)), parse = TRUE) +
+    theme_bw() +
+    theme(panel.grid = element_blank()) +
+  labs(x = 'DNA sequence dissimilarity',
+       y = 'SCD dissimilarity'
+       )
+       
+```
+
+```{r}
+library(rstanarm)
+library(tidybayes)
+
+# 2. Fit the Bayesian Regression model (uses pre-compiled Stan code) # this is basicaly categorical, not ordinal
+# 'stan_glm' uses the same syntax as standard 'lm' or 'glm'
+#strata_fit <- stan_glm(delta_cis ~ strata_ord, data = full_gam, refresh = 0)
+
+#summary(strata_fit)
+kind_of_thing <- stan_glm(delta_cis ~ DNA, data = filterXTR, refresh = 0)
+
+kind_of_thing |> summary()
+
+filtered_bay <- stan_glm(delta_cis ~ strata_ord, data = filterXTR, refresh = 0)
+
+draw_bay <- filtered_bay %>% spread_draws(strata_ord.L, regex = TRUE) %>%
+  median_qi(strata_ord.L)
+
+#filtered_bay |> summary()
+
+# lm(delta_cis ~ strata_ord, data =  filterXTR) |> summary() no es sig
+
+
+
+```
+
+```{r}
+?print.stanreg
+```
+
+```{r}
+#test
+  
+# 1. Create a data grid containing all unique levels of your ordinal predictor
+grid_test <- data.frame(strata_ord = c("2" ,  "3a" , "3b" , "4" ,  "5" ))
+
+# 2. Add posterior expectation draws
+grid_predictions <- grid_test %>%
+  add_epred_draws(
+filtered_bay)
+
+# 3. Plot using ggdist geoms (like stat_pointinterval or stat_halfeye)
+grid_predictions %>%
+  ggplot(aes(x = strata_ord, y = .epred)) +
+  geom_point(aes(strata_label, delta_cis), data = filterXTR, alpha= 0.5, size = rel(3), colour = 'purple3') +
+ # geom_label = gam_short
+  geom_smooth(se = FALSE) +
+ # geom_line(aes(y = .epred, group = .draw), alpha = 1/20, color = "#08519C") +
+  stat_lineribbon(aes(y = .epred), .width = c(.1), color = "#08519C") +
+ # stat_halfeye(.width = c(0.66, 0.95), fill = "skyblue") +
+  labs(
+    x = "Ordinal Predictor Level",
+    y = "Expected Continuous Dependent Variable",
+    title = "Posterior Predictions Across Ordinal Categories"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+strata_plot <- 
+filterXTR |>
+  ggplot(aes(strata_label, delta_cis, label = gam_short)) +
+  #geom_smooth(formula = delta_cis ~ avg_years, data = filterXTR) +
+  geom_text_repel()+
+  geom_point(alpha= 0.5, size = rel(3), colour = 'purple3') +
+ # scale_x_discrete(sec.axis = sec_axis(~. * mill_years, name = "mill", )) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+#  annotate(geom = 'text', y = 0.1, x = 1, label = '90% CI[-1.3,-0.128]',) +
+  labs(x = 'Evolutionary stratum/\nmillion years since divergence',
+       y = 'SCD dissimilarity'
+       )
+
+
+```
+
+
+
+
+
+
+
+
+
+#pane3 with gametolog divergence
+```{r panel3 v3, warning=FALSE, message=FALSE}
+#| fig-height: 11
+#| fig-width: 11
+
+pdf('panel_3v3.pdf', height = 10, width = 10)
+set.seed(1)
+quad_path_plot + #a
+  theme_bw() +
+  theme(panel.grid = element_blank(), 
+        legend.position = 'none',  
+        strip.text = element_blank(),
+        axis.title = element_text(size = 9),
+        plot.tag = element_text(hjust = -4),
+        axis.title.y = element_text(vjust = -15)) + 
+  labs(tag = 'a') +
+xlq_volc_xist + #b
+  theme_classic() +
+  theme(legend.position = 'none', 
+        axis.line = element_line(linewidth = 0.2),
+        axis.title.x = element_text(size = 10, hjust = 1.7),
+        axis.title.y = element_text(size = 10, hjust = 0.5)) +
+  labs(tag = 'b') +
+xlq_up_plot + # c
+  scale_y_continuous(limits = c(0,20), breaks = seq(0, 15, by = 5)) +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(vjust = -15),
+        axis.line = element_line(linewidth = 0.2),
+        legend.position = 'none') + 
+  labs(tag = 'c') +
+inset_element(
+  xlq_down_plot + #d
+ #   theme_classic() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(), #element_text(size = 9, hjust = 1.5)
+          axis.line = element_line(linewidth = 0.2),
+          plot.tag = element_text(face = 'bold'),
+          legend.position = 'none') + 
+  labs(tags = 'd') , 
+  left = 0.57, bottom = 0.47, right = 0.99, top = 1 ,align_to = 'full') +
+  
+
+#plot_layout(guides = 'collect', axis_titles = 'collect', axes = 'collect', heights = c(3,1), ncol = 1, nrow = 2) +
+wrap_elements(
+ups_plot + labs(x = '') +
+#upsV2_plot &
+ theme_bw() +
+ theme(
+  #  panel.grid = element_blank(),
+    panel.border = element_blank(),
+    plot.background = element_rect(color = "black", linewidth = 0.5, fill = NA, inherit.blank = TRUE),
+    plot.subtitle = element_text(hjust = 0.14, vjust = 0), 
+    plot.tag = element_text(hjust = -4),
+    strip.background = element_blank(),
+    strip.text = element_text(size = rel(1)),
+    legend.position = 'none', 
+    axis.text.y = element_text(size = rel(1.2)),
+    axis.title.x = element_text(vjust = -12, hjust = 0.2),
+    axis.title.y = element_blank()
+    #    legend.position.inside = c(0.91, 0.91))
+ )
+) + 
+  labs(tag = 'e') + 
+vst_mean_plot + 
+    theme_bw() +
+  theme(panel.grid = element_blank()) +
+  theme(legend.position = 'none') +
+  labs(x = expression(log2FC[XCD3]),
+       y = expression(Xa~expression~(mean)),
+       tag = 'f') + 
+upy_volc_plot + #g
+    theme_classic() +
+  theme(legend.position = 'none',
+             axis.line = element_line(linewidth = 0.2),
+    #    plot.tag = element_text(hjust = -4),
+        axis.title.y = element_text(vjust = -15)) +
+  labs(x = expression(log2FC[YCD2]), tag = 'g') +  #theme(plot.tag = element_text(face = 'bold', hjust = 150)) +
+inset_element(
+  y_0to2_plot +  
+  theme(axis.title.y = element_blank(),      axis.line = element_line(linewidth = 0.2), legend.position = 'none'),
+  left = 0.01, bottom = 0.4, right = 0.55, top = 1) +
+wrap_plots(
+  dna_dis_plot + ylim(0,1)+ labs(tag = 'h'),
+  strata_plot + ylim(0,1), ncol = 2, axes = 'collect', widths = c(0.9, 1.1)) +
+PAR_1to4_cor_plot + theme_bw() +
+  theme(panel.grid = element_blank()) +
+  #  theme_classic() +
+  theme(legend.position = 'none') +
+  labs(tag = 'i') +
+#wrap_elements(chr_region_legend) +
+#wrap_elements(fake_legend) +
+ ###############
+plot_layout(
+#  guides = 'collect', 
+ # axis_titles = 'collect',
+ # axes = 'collect',
+ # ncol = 2,
+  design = 'aaaabbccccc
+            eeeeeffffff
+            gggghhhhiii',
+ heights = c(0.9, 1, 0.9),
+ widths = c(0.85,1,1,1.1,0.5,1,1,1,1,1,0.7)
+              ) &
+  theme(plot.tag = element_text(face = 'bold'),
+     #   plot.tag.position = c(-0.025, 0.97),
+        axis.title = element_text(size = 10)
+        )
+
+
+
+dev.off()
+```
+
+```{r}
+filterXTR |>
+  ggplot(aes(avg_years, delta_cis, label = gam_short)) +
+  geom_smooth(method = 'lm') +
+  geom_text_repel()+
+  geom_point(alpha= 0.5, size = rel(3), colour = 'purple3') +
+ # scale_x_discrete(sec.axis = sec_axis(~. * mill_years, name = "mill", )) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  labs(x = 'Evolutionary stratum and\nmillion years since divergence',
+       y = 'SCD dissimilarity'
+       )
+```
+
+
+```{r tests}
+library(rstanarm)
+
+# 2. Fit the Bayesian Regression model (uses pre-compiled Stan code) # this is basicaly categorical, not ordinal
+# 'stan_glm' uses the same syntax as standard 'lm' or 'glm'
+#strata_fit <- stan_glm(delta_cis ~ strata_ord, data = full_gam, refresh = 0)
+
+#summary(strata_fit)
+
+
+filtered_bay <- stan_glm(delta_cis ~ strata_ord, data = filterXTR, refresh = 0, )
+
+filtered_bay |> summary()
+
+posterior_interval(filtered_bay, prob = 0.90)
+
+posterior_interval(strata_fit, prob = 0.80)
+```
+
+```{r}
+full_gam |>
+  cor_test(vars = c(X_lfc, Y_lfc), method = 'spearman')
+
+
+
+full_gam |>
+  cor_test(vars = c(delta_cis, DNA), method = 'spearman') #0.42, p = 0.2324181 greater : 0.11
+
+full_gam |> cor_test(vars = c(delta_cis, Protein), method = 'spearman') #cor = 0.091	, p = 0.8015855 greater 0.4
+
+
+  lm(delta_cis ~ `Classification 2 (clusters from Pandey et al. 2013)`, data = full_gam) |> glance(detailed = TRUE)
+```
+
+
+```{r}
+promoter_dis <- 
+  full_gam |>
+  cor_test(vars = c(delta_cis, `Promoter (overall)`), method = 'spearman',  alternative = 'g') #0.47, p = 0.1782193 #gretaer: p 0.08910966
+
+#promoter2_dis <- 
+ # full_gam |>
+ # cor_test(vars = c(delta_cis, `Promoter (non-gapped)`), method = 'spearman',  alternative = 'g') #cor 0.28, p = 0.2
+
+full_gam |>
+  ggplot(aes(`Promoter (overall)`, delta_cis, label = gam_pair)) +
+ # geom_abline(lty = 3) +
+    geom_smooth(method = 'lm', colour = 'grey15', fill = 'grey85') +
+    geom_point(alpha= 0.5, size = rel(3), colour = 'purple3') +
+    geom_text_repel() + 
+    annotate(geom = 'text', x = 0.44, y = -0.1, label = paste0(expression('italic(r)[s]=='), round(promoter_dis$cor,2)), parse = TRUE) +
+    annotate(geom = 'text', x = 0.44, y = -0.2, label = paste0(expression('italic(p)[s]=='), round(promoter_dis$p,2)), parse = TRUE) +
+    theme_bw() +
+    theme(panel.grid = element_blank()) +
+  labs(x = 'Promoter dissimilarity',
+       y = expression(paste(Delta, ' cis-effect'))
+       )
+```
+
+
+```{r}
+library(tidyverse)
+tibble(
+  Sex = c('Fem', 'Masc'),
+  Ausente = c(19, 34),
+  Presente = c(34,14)
+) |>
+column_to_rownames('Sex')
+```
+
+```{r}
+
+data.frame(
+  Ausente = c(19, 34),
+  Presente = c(34,14)
+) |>
+`rownames<-`(c('Fem', 'Masc'))
+```
+```{r}
+astrag <-
+data.frame(
+  Ausente = c(19, 34),
+  Presente = c(9, 14)
+) 
+rownames(astrag) <- c('Fem', 'Masc')
+
+chisq.test(astrag)
+```
+
+```{r}
+tibia <-
+data.frame(
+  Ausente = c(15, 27),
+  Presente = c(10, 17)
+) 
+rownames(tibia) <- c('Fem', 'Masc')
+
+chisq.test(tibia)
+```
+
+
+```{r}
+#spearman
+sCFD_dis <- 
+  full_gam |>
+  cor_test(vars = c(delta_cis, `mean_sCFD[XM_YM]`), method = 'spearman') #0.47, p = 0.1782193 #gretaer: p 0.08910966
+
+full_gam |>
+  ggplot(aes(`mean_sCFD[XM_YM]`, abs(delta_cis), label = gam_pair)) +
+ # geom_abline(lty = 3) +
+    geom_smooth(method = 'lm', colour = NULL, fill = 'grey85') +
+    geom_point(alpha= 0.5, size = rel(3), colour = 'purple3') +
+    geom_text_repel() + 
+    annotate(geom = 'text', x = 0.015, y = -0.1, label = paste0(expression('italic(r)[s]=='), round(sCFD_dis$cor,2)), parse = TRUE) +
+    annotate(geom = 'text', x = 0.015, y = -0.2, label = paste0(expression('italic(p)=='), round(sCFD_dis$p,2)), parse = TRUE) +
+ # coord_cartesian(ylim = c(-0.2, 1)) +
+    theme_bw() +
+    theme(panel.grid = element_blank()) +
+    labs(x = 'Mean sCFD',
+       y = expression(paste(Delta, ' cis-effect'))
+       )
+
+
+```
+
+
+
+```{r}
+aCFD_dis <- 
+  full_gam |>
+  cor_test(vars = c(delta_cis, `mean_aCFD[XM_YM]`), method = 'spearman') #0.47, p = 0.1782193 #gretaer: p 0.08910966
+
+full_gam |>
+  ggplot(aes(`mean_aCFD[XM_YM]`, abs(delta_cis), label = gam_pair)) +
+ # geom_abline(lty = 3) +
+    geom_smooth(method = 'lm', colour = 'grey85', fill = 'grey85') +
+    geom_point(alpha= 0.5, size = rel(3), colour = 'purple3') +
+    geom_text_repel() + 
+    annotate(geom = 'text', x = 0.25, y = -0.1, label = paste0(expression('italic(r)[s]=='), round(aCFD_dis$cor,2)), parse = TRUE) +
+    annotate(geom = 'text', x = 0.25, y = -0.2, label = paste0(expression('italic(p)=='), round(aCFD_dis$p,2)), parse = TRUE) +
+ # coord_cartesian(ylim = c(-0.2, 1)) +
+    theme_bw() +
+    theme(panel.grid = element_blank()) +
+    labs(x = 'Mean aCFD',
+       y = expression(paste(Delta, ' cis-effect'))
+       )
+```
+
+
+
+```{r tests}
+
+#quiuck check baseline wiht lm
+
+lm_gam_fit <- lm(delta_cis ~ avg_years, data = filterXTR)
+
+#lm_gam_fit |> glance()
+
+anova(lm_gam_fit)
+```
+
+```{r}
+
+lm(delta_cis ~ strata_ord, 
+   data = filterXTR) |>
+  anova() |> tidy()
+```
+
+```{r}
+filterXTR |>
+  kruskal_test(delta_cis ~ strata_ord)
+
+filterXTR |>
+dunn_test(delta_cis ~ strata_ord, p.adjust.method = "holm")
+```
+
+
+
+
+```{r test}
+
+#this fx didn worked , need C compiling
+library(brms) # test directly as ordinal
+
+
+# Fit model with a monotonic effect
+fit_ordinal <- brm(delta_cis ~ mo(strata_ord), data = full_gam)
+
+glance(fit_ordinal)
+```
+
+```{r}
+sexchr_patterns |>
+  dplyr::filter(ds_profile == 'YCD linear negative') |> pull(XCI_2025)
+```
+
+
+```{r}
+all2to1_clean |> 
+  dplyr::filter(chr_tag == 'Autosome') |>
+  pull(ds_profile) |> table()
+```
+```{r}
+857/22014
+```
+We also observe convergent positive XCD and YCD effects (log2FCXCD2 =x;  log2FCYCD2 =x) for one X-linked gene - a lncRNA nested antisense to XACT (ENSG00000288595) in the Xq23 band
+
+```{r}
+#sexchr_patterns |>
+ # left_join(gen50_ensg, by= 'ENSG_id') |>
+ # dplyr::filter(ENSG_id == 'ENSG00000288595') #gene_name in ens 50 still lacking
+
+all2to1 |>
+   dplyr::filter(ENSG_id == 'ENSG00000288595')
+
+```
+
+All 6 genes showing significant negative effects of both XCD and YCD on their expression were X-linked
+```{r}
+sexchr_patterns |>
+  dplyr::filter(ds_profile == 'YCD + XCD linear negative') |>
+  left_join(gen50_ensg, by = 'ENSG_id') |>
+  pull(XCI)
+```
+```{r}
+all2to1 |>
+  left_join(sexchr_patterns , by = 'ENSG_id') |>
+  dplyr::filter(ds_profile == 'YCD + XCD linear negative') %>%
+  cor_test(., vars = c(XCDlfc, YCDlfc), method = 'spearman')
+```
+
+These nested gene sets were clearly enriched for different genomic locations (can we put a test/p here?) according to the logic of  direct cis-effects of altered chromosomal dosage on expression (with the exception of evidence for cross-regulation of some X-linked genes by YCD)
+
+```{r}
+ds_n <-
+hg38_proportions50 |>
+  dplyr::filter(chr_tag != 'Autosome') |>
+  mutate(ds = case_when(str_detect(ds_profile,'X') & !str_detect(ds_profile,'Y') ~ 'XCD',
+                        str_detect(ds_profile,'Y') & !str_detect(ds_profile,'X') ~ 'YCD',
+                        str_detect(ds_profile,'X') & str_detect(ds_profile,'Y') ~ 'YCD & XCD',
+                        TRUE ~ ds_profile
+                        )
+         ) |>
+  summarise(.by = c(ds, short_tag), n = n()) |>
+  arrange(ds)|>
+  pivot_wider(names_from = short_tag, values_from = n) |>
+  column_to_rownames('ds') |>
+  mutate(across(everything(), ~replace_na(.x, 0)))
+
+```
+
+```{r}
+#XCD x- linked #9.169975	0.00404894	
+rbind(
+  ds_n[1,],
+  colSums(ds_n[-1,])
+) |>
+mutate( noX_link = PAR + Y_link, .keep = 'unused') |>
+fisher_test(detailed = TRUE)
+```
+
+```{r}
+#yCD y- linked
+rbind(
+  ds_n[2,],
+  colSums(ds_n[-2,])
+) |>
+mutate( noY_link = PAR + X_link, .keep = 'unused') |>
+fisher_test(detailed = TRUE)
+```
+
+
+```{r}
+#yCD y- linked
+rbind(
+  ds_n[3,],
+  colSums(ds_n[-3,])
+) |>
+mutate( noPAR = Y_link + X_link, .keep = 'unused') |>
+fisher_test(detailed = TRUE)
+```
+
+
+```{r}
+dsprof_n <-
+hg38_proportions50 |>
+  dplyr::filter(chr_tag != 'Autosome') |>
+  summarise(.by = c(ds_profile, short_tag), n = n()) |>
+  arrange(ds_profile)|>
+  pivot_wider(names_from = short_tag, values_from = n) |>
+  column_to_rownames('ds_profile') |>
+  mutate(across(everything(), ~replace_na(.x, 0)))
+```
+
+```{r}
+# only linesar # 2268.155	2.107293e-93	
+rbind(
+  dsprof_n[2,],
+  colSums(dsprof_n[-2,])
+) |>
+mutate( noX_link = PAR + Y_link, .keep = 'unused') |>
+fisher_test(detailed = TRUE)
+```
+
+```{r}
+# only quad # 2268.155	2.107293e-93	
+rbind(
+  dsprof_n[3,],
+  colSums(dsprof_n[-3,])
+) |>
+mutate( noX_link = PAR + Y_link + 0.5, 
+        X_link = X_link + 0.5, .keep = 'unused') |>
+
+fisher_test(detailed = TRUE)
+```
+```{r}
+dsdir_n <-
+hg38_proportions50 |>
+  dplyr::filter(chr_tag != 'Autosome') |>
+  left_join(sexchr_patterns, join_by('item' == 'ENSG_id')) |>
+  replace_na(list(ds_profile.y = 'not SCD')) |>
+  summarize(.by = c(short_tag.x, ds_profile.y), n = n()) |>
+  arrange(ds_profile.y)|>
+  pivot_wider(names_from = short_tag.x, values_from = n) |>
+  column_to_rownames('ds_profile.y') |>
+  mutate(across(everything(), ~replace_na(.x, 0)))
+```
+
+```{r}
+#positive XCD
+rbind(
+  dsdir_n[2,],
+  colSums(dsdir_n[-2,])
+) |>
+mutate( noX_link = PAR + Y_link, 
+        X_link = X_link, .keep = 'unused') |>
+fisher_test(detailed = TRUE)
+```
+
+```{r}
+#positive YCD
+rbind(
+  dsdir_n[7,],
+  colSums(dsdir_n[-7,])
+) |>
+mutate( noY_link = PAR + X_link, 
+        Y_link = Y_link, .keep = 'unused') |>
+fisher_test(detailed = TRUE)
+```
+
+```{r}
+#positive YCD + XCD
+rbind(
+  dsdir_n[5,],
+  colSums(dsdir_n[-5,])
+) |>
+mutate( noPAR = Y_link + X_link, 
+        .keep = 'unused') |>
+fisher_test(detailed = TRUE)
+```
+
+
+```{r}
+#what hapen if I estimate the gametolog considering all the categories (reaines, pseudogenized and lost)
+
+Y_retain <-
+  read_xlsx('Melissa_wilson_Y-homologous.SupplementaryTable1-SummaryData.xlsx', sheet = 'genes', start_row = 2) 
+
+colnames(Y_retain) <- colnames(Y_retain) |> make.names(unique = TRUE)
+```
+
+
+```{r}
+colnames(Y_retain)
+```
+
+```{r}
+xy_ret <-
+xcde |>
+  unnest(gene_alias.x) |> 
+  inner_join(Y_retain,
+            join_by('gene_alias.x' == 'gene')) |>
+  dplyr::select(gene_name, 
+                logFC_1to3,
+                adj.P.Val_1to3,
+                X_region, Strata, 
+                Y_sequence_classification, is_gametolog) |>
+  unique() |>
+  arrange(gene_name)
+ # mutate(Y_fx = )
+```
+```{r}
+xy_ret |>
+  ggplot(aes(Y_sequence_classification, logFC_1to3, 
+             color = Strata, shape = X_region,
+             label = gene_name)) +
+  geom_point() +
+  geom_boxplot(aes(group = Y_sequence_classification)) +
+  geom_text_repel() +
+  theme_bw()
+```
+```{r}
+sexchr_patterns_clean %>% arrange(gene_name) %>%
+  .$gene_name
+```
+
+```{r}
+rowRanges(uneroded_se) |>
+  as.data.frame() |>
+  dplyr::filter(seqnames == 'chrY' ) |>
+  arrange(gene_symbol) |>
+  pull(gene_symbol)
+```
+
+```{r}
+thought <- 
+  rstanarm::stan_glm(logFC_1to3 ~Y_sequence_classification, data = xy_ret)
+```
+
+```{r}
+thought |> summary()
+```
+#####stan_glm converts categorical predictors into dummy variables, the numerical coefficients represent the difference between that specific group and the reference group (the category omitted from the summary, likely the alphabetical first category).
+• (Intercept) (1.0): This is the expected mean logFC_1to3 for the reference category. There is an 80% probability (between the 10% and 90% quantiles) that the true baseline mean sits between 0.6 and 1.3.
+• lostY (-0.4): Units in this category have a lower expected logFC_1to3 value than the reference group by 0.4 units. Since the 90% quantile touches exactly 0.0, there is a strong probability (roughly 90%) that this effect is truly negative.
+• pseudogene (-0.3): This group also shows a negative trend relative to the reference group, with an 80% credible interval ranging from -0.7 to 0.1.
+• notAnc_addXY (0.6) & PAR1/pseudogene (0.5): These groups show the highest positive shifts relative to the reference category, though they have wider standard deviations (0.6), indicating higher uncertainty.
+• sigma (0.5): The residual standard deviation of the data around the model's predictions is tightly estimated at 0.5.
+
+```{r}
+xy_ret_clean <- 
+
+xy_ret |>
+  mutate(
+    fxY = case_when(
+    str_starts(gene_name, 'VCX') ~ 'gene',
+    TRUE ~ Y_sequence_classification
+  )) |>
+  group_by(fxY) |>
+  mutate(mean_log2fc3 = mean(logFC_1to3),
+         fxY = fct_reorder(fxY, mean_log2fc3 )) |>
+  ungroup() |>
+  dplyr::filter(
+    !is.na(Y_sequence_classification) &
+      Strata != 'XTR' &
+      Strata != 'PAR1'
+  ) 
+
+lm(logFC_1to3 ~fxY, data = xy_ret_clean) |> summary()
+
+```
+```{r}
+xy_ret_clean |>
+  ggplot(aes(fct_reorder(fxY, mean_log2fc3, .desc = TRUE), logFC_1to3, 
+             shape = Strata, color = X_region,
+             label = gene_name)) +
+  geom_point() +
+  geom_boxplot(aes(group = fxY), show.legend = FALSE) +
+  geom_text_repel() +
+  theme_bw()
+```
+```{r}
+fxY_mod <- lm_robust(logFC_1to3 ~ fxY, data = xy_ret_clean, se_type = 'HC3')
+
+fxY_mod |> summary()
+```
+
+```{r}
+fxY_emm <- fxY_mod %>% emmeans(~ fxY)
+fxY_pairs <- fxY_emm %>% pairs(adjust = 'holm')
+```
+
+```{r}
+xy_ret_bin <- 
+  xy_ret_clean |>
+  mutate(is_yfx = if_else(fxY == 'gene', 'yes', 'no'))
+
+ lm_robust(logFC_1to3 ~ is_yfx, data = xy_ret_bin, se_type = 'HC3')
+
+```
+
+
+#### retest XCI because it was, XY_scaled, normalized or vst counts
+
+
+```{r}
+se_clean <- 
+  read_rds('../SDN_Multiomic/IPSC_RNA/Updated_iPSC_RNA/12_2025_se_clean.rds')
+```
+
+```{r}
+aut_patterns_clean |> 
+  arrange(gene_name) |>
+  pull(gene_name)
+```
+
